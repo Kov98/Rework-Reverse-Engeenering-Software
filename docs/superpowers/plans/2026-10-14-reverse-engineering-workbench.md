@@ -64,7 +64,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - `Envelope(version: int, request_id: str, analysis_id: str | None, operation: str, payload: JsonObject, error: JsonObject | None)`. Protocolo inicial `version=1`; erro contém `code,message,details`; operações: `hello,catalog,inspect,open,analyze,page,decompile,rename,save,close,cancel,heartbeat`.
 - `Cancellation`: `cancel() -> None`, `cancelled() -> bool`, `bind(cancel_callback: Callable[[], None]) -> None`. Permite que o receptor cancele o monitor Java ativo sem executar outras operações semânticas.
 
-## Tarefa 1: Projeto persistente, contratos e leitura de amostras
+### Task 1: Projeto persistente, contratos e leitura de amostras
 
 **Arquivos:** criar `pyproject.toml`, `.gitignore`, `src/reworkbench/domain.py`, `src/reworkbench/project/repository.py`, `src/reworkbench/project/storage.py`, `src/reworkbench/project/bytes.py`, `tests/unit/test_project.py`, `tests/unit/test_bytes.py` e `tests/conftest.py`.
 
@@ -81,7 +81,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar os dois arquivos de teste; exigir aprovação dos casos de persistência, bloqueio, busca e leitura por intervalos.
 - [ ] Commit: `git add pyproject.toml .gitignore requirements-dev.lock src/reworkbench tests` e `git commit -m "feat: add project persistence and binary reader"`.
 
-## Tarefa 2: Ambiente verificável e fixtures próprias
+### Task 2: Ambiente verificável e fixtures próprias
 
 **Arquivos:** criar `src/reworkbench/engine/config.py`, `tools/build_fixtures.py`, `tests/fixtures/src/fixture.c`, `tests/fixtures/src/audit_api.c`, `tests/fixtures/src/arm.s`, `tests/fixtures/src/thumb.s`, `tests/fixtures/src/mips.s`, `tests/fixtures/manifest.json`, `tests/unit/test_environment.py` e `tests/integration/test_fixture_manifest.py`.
 
@@ -98,7 +98,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar os testes e conferir os formatos com ferramentas LLVM. Se o provisionamento falhar, registrar o bloqueio real; não substituir fixtures por bytes que apenas imitem cabeçalhos.
 - [ ] Commit: `git add src/reworkbench/engine/config.py tools tests/fixtures tests/unit/test_environment.py tests/integration/test_fixture_manifest.py` e `git commit -m "test: add reproducible multi architecture fixtures"`.
 
-## Tarefa 3: Transporte autenticado e supervisão de processos
+### Task 3: Transporte autenticado e supervisão de processos
 
 **Arquivos:** criar `src/reworkbench/engine/protocol.py`, `src/reworkbench/engine/supervisor.py`, `src/reworkbench/engine/winjob.py`, `src/reworkbench/engine/worker.py`, `tests/unit/test_protocol.py`, `tests/integration/test_supervisor.py` e `tests/helpers/worker_process.py`.
 
@@ -114,7 +114,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar testes; confirmar ausência dos processos descendentes após encerramento forçado. Usar chamadas Win32 via `ctypes`, sem nova dependência de runtime.
 - [ ] Commit: `git add src/reworkbench/engine tests/unit/test_protocol.py tests/integration/test_supervisor.py tests/helpers` e `git commit -m "feat: supervise isolated analysis workers"`.
 
-## Tarefa 4: Motor Ghidra real e operações semânticas
+### Task 4: Motor Ghidra real e operações semânticas
 
 **Arquivos:** criar `src/reworkbench/engine/backend.py`, `src/reworkbench/engine/loaders.py`, `src/reworkbench/engine/records.py`, `src/reworkbench/engine/decompiler.py`, `tests/integration/test_engine.py`; modificar `src/reworkbench/engine/worker.py`.
 
@@ -131,7 +131,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar a matriz real, incluindo novo processo para reabertura, cancelamento e recuperação após erro; exigir aprovação antes de registrar a entrega.
 - [ ] Commit: `git add src/reworkbench/engine tests/integration/test_engine.py` e `git commit -m "feat: integrate Ghidra analysis and decompilation"`.
 
-## Tarefa 5: Sessão da investigação, fila e reconciliação
+### Task 5: Sessão da investigação, fila e reconciliação
 
 **Arquivos:** criar `src/reworkbench/application/session.py`, `tests/unit/test_session.py`, `tests/integration/test_session_engine.py`; modificar repositório e worker somente para os contratos abaixo.
 
@@ -147,7 +147,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar testes unitários e integração real; exigir aprovação de reconciliação, revisão e seleção.
 - [ ] Commit: `git add src/reworkbench/application/session.py src/reworkbench/project src/reworkbench/engine/worker.py tests/unit/test_session.py tests/integration/test_session_engine.py` e `git commit -m "feat: coordinate persistent investigation sessions"`.
 
-## Tarefa 6: Janela desktop, configuração e exploradores paginados
+### Task 6: Janela desktop, configuração e exploradores paginados
 
 **Arquivos:** criar `src/reworkbench/ui/window.py`, `src/reworkbench/ui/models.py`, `src/reworkbench/ui/settings.py`, `src/reworkbench/ui/hex_view.py`, `src/reworkbench/__main__.py`, `tests/ui/test_workspace.py` e `tests/ui/test_models.py`.
 
@@ -163,7 +163,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar testes e abrir a janela real no Windows para verificar foco, acoplamento e configuração ausente.
 - [ ] Commit: `git add src/reworkbench/ui src/reworkbench/__main__.py pyproject.toml tests/ui` e `git commit -m "feat: add native reverse engineering workspace"`.
 
-## Tarefa 7: Importação configurável e navegação entre assembly e pseudocódigo
+### Task 7: Importação configurável e navegação entre assembly e pseudocódigo
 
 **Arquivos:** criar `src/reworkbench/ui/import_dialog.py`, `src/reworkbench/ui/code_view.py`, `tests/ui/test_navigation.py`; modificar `src/reworkbench/ui/window.py`.
 
@@ -179,7 +179,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar testes e navegar a fixture PE real da lista de funções até uma chamada e de volta.
 - [ ] Commit: `git add src/reworkbench/ui tests/ui/test_navigation.py` e `git commit -m "feat: add configurable imports and semantic navigation"`.
 
-## Tarefa 8: Observações, triagem e exportação
+### Task 8: Observações, triagem e exportação
 
 **Arquivos:** criar `src/reworkbench/application/audit.py`, `src/reworkbench/application/exports.py`, `src/reworkbench/ui/investigation.py`, `tests/unit/test_audit_exports.py`, `tests/ui/test_investigation.py`; modificar janela e sessão para expor exportação.
 
@@ -195,7 +195,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 - [ ] Reexecutar testes, fechar/reabrir e exportar investigação real com a fixture PE importada.
 - [ ] Commit: `git add src/reworkbench/application src/reworkbench/ui tests/unit/test_audit_exports.py tests/ui/test_investigation.py` e `git commit -m "feat: preserve findings and export analysis evidence"`.
 
-## Tarefa 9: Execução Windows e validação integral
+### Task 9: Execução Windows e validação integral
 
 **Arquivos:** criar `scripts/run.ps1`, `scripts/doctor.ps1`, `README.md`, `docs/validation.md`, `tests/integration/test_end_to_end.py`; modificar `tests/conftest.py` e metadados de pacote para a entrega final.
 

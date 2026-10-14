@@ -1,0 +1,11 @@
+# Windows x64 / CPython 3.13. Resolved 2026-10-14.
+PySide6-Essentials==6.12.0
+shiboken6==6.12.0
+pytest==9.1.1
+pytest-qt==4.5.0
+colorama==0.4.6
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.6.0
+Pygments==2.21.0
+typing_extensions==4.16.0
