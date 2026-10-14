@@ -165,6 +165,13 @@ class ProjectRepository:
         escaped = query.casefold().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         where = "analysis_id=? AND kind=? AND search LIKE ? ESCAPE '\\'"
         args = (analysis_id, kind, f"%{escaped}%")
+        if query.startswith("@address=") and kind in ("assembly", "xrefs"):
+            space, value = query[len("@address="):].rsplit(":", 1)
+            address = Address(space, value)
+            fields = ("address", "function_address") if kind == "assembly" else ("source", "target", "source_function", "target_function")
+            predicates = [f"(json_extract(payload,'$.{field}.space')=? AND json_extract(payload,'$.{field}.value')=?)" for field in fields]
+            where = "analysis_id=? AND kind=? AND (" + " OR ".join(predicates) + ")"
+            args = (analysis_id, kind, *[v for _ in fields for v in (address.space, address.value)])
         def fetch(conn):
             total = conn.execute(f"SELECT COUNT(*) FROM records WHERE {where}", args).fetchone()[0]
             rows = conn.execute(f"SELECT payload FROM records WHERE {where} ORDER BY ordinal LIMIT ? OFFSET ?", (*args, limit, offset)).fetchall()

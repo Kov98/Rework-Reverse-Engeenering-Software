@@ -167,7 +167,7 @@ Definir estes contratos na tarefa 1; importar os mesmos tipos em todas as tarefa
 
 **Arquivos:** criar `src/reworkbench/ui/import_dialog.py`, `src/reworkbench/ui/code_view.py`, `tests/ui/test_navigation.py`; modificar `src/reworkbench/ui/window.py`.
 
-**Interfaces:** `ImportDialog(catalog: JsonObject, choices: JsonObject)`, `selected_options() -> ImportOptions`; `CodeView`, `show_function(analysis_id: str, address: Address) -> None`, `apply_result(event: JsonObject) -> None`; `NavigationHistory.push(analysis_id: str, address: Address) -> None`, `back() -> tuple[str, Address] | None`, `forward() -> tuple[str, Address] | None` em `code_view.py`. Consumir contratos Session da tarefa 5.
+**Interfaces:** `ImportDialog(source: Path, inspection: JsonObject, catalog: JsonObject)`, `selected_options() -> ImportOptions`; `CodeView`, `show_function(analysis_id: str, address: Address) -> None`, `apply_result(event: JsonObject) -> None`; `NavigationHistory.push(analysis_id: str, address: Address) -> None`, `back() -> tuple[str, Address] | None`, `forward() -> tuple[str, Address] | None` em `code_view.py`. Consumir contratos Session da tarefa 5.
 
 - [ ] Escrever `test_slice_choice_is_explicit`, `test_raw_dialog_preserves_thumb_and_entry`, `test_function_selection_updates_both_views`, `test_old_result_cannot_replace_new_selection`, `test_xref_follow_and_back`, `test_rename_validation_and_error`, `test_analysis_error_keeps_hex_available`. Exigir que endereço/rotulagem da função exibida corresponda ao request atual; entradas inválidas não iniciam análise e configuração corrigida cria nova análise.
   ```python
@@ -227,4 +227,4 @@ Recomendação de execução: **nativa**, com o agente principal implementando a
 - Dependências do adaptador: https://github.com/NationalSecurityAgency/ghidra/blob/Ghidra_12.1.4_build/Ghidra/Features/PyGhidra/src/main/py/pyproject.toml — respeitar o pin de JPype1 fornecido pelo PyGhidra, sem atualização isolada.
 - Receitas de fixtures: https://clang.llvm.org/docs/CrossCompilation.html, https://lld.llvm.org/, https://lld.llvm.org/MachO/index.html, https://llvm.org/docs/CommandGuide/llvm-objcopy.html
 
-Estado: plano escrito; aguardando revisão do usuário e escolha do método de execução antes da implementação.
+Estado: plano aprovado e implementação nativa autorizada. Em 14/10/2026 o usuário determinou escrever somente código, suspendendo a execução de testes e compilações. Os passos de validação ainda não realizados permanecem pendentes, conforme docs/validation.md. Exportações retornam o Path do destino para confirmação na interface. ImportDialog recebe também o caminho da amostra para exibi-lo durante a configuração.

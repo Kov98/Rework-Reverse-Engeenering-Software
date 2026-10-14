@@ -20,7 +20,10 @@ from reworkbench.engine.winjob import WindowsJob
 class WorkerSupervisor:
     def __init__(self, config: EngineConfig, on_event, *, worker_command=None, startup_timeout_s=60, idle_timeout_s=60, cancel_grace_s=5, clock=time.monotonic, log_dir: Path | None = None):
         self.config, self.on_event = config, on_event
-        self.worker_command = worker_command or [sys.executable, "-u", "-m", "reworkbench.engine.worker"]
+        executable = Path(sys.executable)
+        if executable.name.lower() == 'pythonw.exe':
+            executable = executable.with_name('python.exe')
+        self.worker_command = worker_command or [str(executable), "-u", "-m", "reworkbench.engine.worker"]
         self.startup_timeout_s, self.idle_timeout_s, self.cancel_grace_s = startup_timeout_s, idle_timeout_s, cancel_grace_s
         self.clock = clock
         self.process = None
@@ -38,6 +41,8 @@ class WorkerSupervisor:
         self.log_path = folder / f"worker-{uuid.uuid4().hex}.log"
 
     def start(self):
+        if self._startup_error:
+            raise RuntimeError(self._startup_error)
         token = secrets.token_bytes(32)
         self._listener = Listener(("127.0.0.1", 0), authkey=token)
         environment = dict(os.environ)
@@ -174,6 +179,9 @@ class WorkerSupervisor:
         if self._closing:
             return
         self._closing = True
+        if not self._ready.is_set():
+            self._startup_error = 'Inicialização do motor interrompida.'
+            self._ready.set()
         if self._connection and not self._stopped.is_set():
             try:
                 self._send(Envelope(1, "shutdown", None, "close"))
@@ -183,3 +191,8 @@ class WorkerSupervisor:
         self._kill()
         if self._job:
             self._job.close()
+
+    def interrupt_startup(self):
+        if not self._ready.is_set():
+            self._startup_error = 'Inicialização do motor interrompida.'
+            self._ready.set()
