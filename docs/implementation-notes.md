@@ -1,5 +1,23 @@
 # Decisões e revisão estática
 
+## Aplicação independente em C++20/Qt
+
+Após o usuário esclarecer que Ghidra é somente inspiração, a aplicação principal foi reescrita em C++20/Qt. A especificação e o plano atuais são os documentos `2026-10-14-independent-native-workbench-*`. O ponto de entrada principal é `native/workbench/src/main.cpp`; `scripts/run.ps1` procura exclusivamente o executável nativo. O ponto de entrada Python é apenas um lançador opcional. `legacy_main.py`, os módulos Python antigos e as dependências opcionais `legacy` preservam o protótipo anterior fora do caminho padrão.
+
+Os contratos públicos ficam em `native/workbench/include/reworkbench`. Os carregadores próprios, a análise/IR e a persistência foram implementados em paralelo contra esses contratos. A interface usa snapshots imutáveis, tarefas em segundo plano e tokens para rejeitar resultados antigos. Renomear cria um novo snapshot; notas pendentes são gravadas antes da troca de análise, exportação e fechamento, e uma falha mantém os rascunhos.
+
+Capstone 5 é uma biblioteca opcional de decodificação de instruções; não descobre as funções nem produz a IR. Sem ela continuam disponíveis metadados, bytes, strings e entropia, com aviso explícito da capacidade ausente. A representação intermediária é parcial, sem SSA, recuperação de tipos ou decompilação estruturada completa. Efeitos não modelados permanecem opacos. MIPS com transferências de controle não recebe um CFG que ignore seus delay slots.
+
+Projetos nativos usam `project.rwb.json`, trava de projeto, amostras copiadas por SHA-256 e SQLite. Os caminhos das amostras são relativos no índice e reconstruídos na abertura para permitir mover o projeto. Carregar uma análise recalcula SHA-256 da cópia selecionada; salvar novos resultados e exportar IR também verificam o conteúdo. A abertura faz uma checagem estrutural das demais cópias. Exportações usam gravação atômica e protegem amostras, origens e arquivos internos. O produto não monitora continuamente alterações feitas por outros processos após uma leitura.
+
+A revisão independente do código nativo identificou três pontos importantes: integridade de cópias alteradas mantendo o tamanho, sementes ARM/Thumb de modo incompatível e textos SQLite alocados antes dos limites. O código foi alterado para recalcular hashes, preservar símbolos incompatíveis sem explorá-los e consultar comprimentos/tipos antes de materializar notas e nomes. Escritas também respeitam os limites agregados de texto. Leituras de tabelas e bytes limpam a seleção anterior imediatamente; pistas são preparadas em segundo plano com uma passagem pelas referências e até 200 registros, e a lista de marcadores mostra até 200 entradas. Uma leitura independente posterior das correções não identificou novos problemas relevantes. Isso é evidência de revisão de fonte, sem validação de compilação ou execução.
+
+Esta etapa respeitou a suspensão de testes, compilação, configuração, execução e instalação. A documentação de build é uma instrução futura, não uma evidência de build realizado. A revisão por leitura não substitui a aceitação pendente em [validation.md](validation.md).
+
+## Histórico do protótipo Python/Ghidra
+
+As decisões e revisões abaixo pertencem à versão anterior e não descrevem o caminho padrão atual.
+
 O desenvolvimento está na branch `feat/reworkbench`, no diretório `.worktrees/implementation`. Não houve publicação nem integração automática na branch principal. O ponto de entrada é `src/reworkbench/__main__.py`; o lançador é `scripts/run.ps1`.
 
 ## Decisões de implementação

@@ -1,5 +1,23 @@
 # Estado de implementação e validação
 
+## Versão principal nativa em C++20/Qt
+
+A direção atual está em [independent-native-workbench-design.md](superpowers/specs/2026-10-14-independent-native-workbench-design.md). O executável principal tem interface C++/Qt, carregadores próprios, descoberta de funções, referências, CFG e IR próprios, com Capstone 5 opcional para decodificar instruções. O caminho padrão não inicia Python, Ghidra ou JVM. Os registros mais abaixo descrevem o protótipo anterior e não validam esta versão nativa.
+
+O código nativo foi escrito e lido estaticamente. **Não foi compilado, configurado, testado ou executado.** Os scripts de preparação e diagnóstico também não foram executados nesta etapa. Não há medição de desempenho ou afirmação de equivalência com um decompilador completo. A IR atual cobre uma parte das instruções; efeitos desconhecidos permanecem opacos, com cobertura e avisos visíveis.
+
+Aceitação futura, somente após nova orientação do usuário:
+
+1. Compilar no Windows com Qt 6.5 ou posterior e C++20, com e sem Capstone 5; verificar DLLs e o plugin QSQLITE, inicialização e caminhos Unicode.
+2. Exercitar PE, ELF, Mach-O, imagens universais e firmware bruto, incluindo arquivos truncados, tabelas sobrepostas, inteiros extremos, BSS sem bytes e seleção explícita de arquitetura, base, entradas e slice.
+3. Conferir instruções, alvos, referências, limites de função e CFG contra amostras conhecidas; verificar paradas em interworking ARM/Thumb, Thumb IT, saltos indiretos e delay slots MIPS.
+4. Conferir a IR contra a semântica das instruções modeladas, incluindo larguras, subregistradores, flags desconhecidas e efeitos opacos. Ausência do decoder deve produzir capacidade limitada explícita.
+5. Exercitar cancelamento, limites de recursos, fechamento durante tarefas, busca paginada e resultados atrasados de seleção, leitura de bytes e progresso.
+6. Criar, reabrir e mover projetos; conferir travas, notas e renomeações persistidas, falhas de gravação e retenção dos rascunhos. Confirmar recusa de cópia alterada, mesmo mantendo o tamanho: o carregamento da análise recalcula SHA-256. Verificar os limites individuais e agregados de notas e nomes antes de trazer seus textos do SQLite.
+7. Conferir SHA-256 na importação, cópias atômicas e exportações, proteção de arquivos de origem e internos, links, estados parciais e preservação dos projetos antigos sem migração implícita.
+
+## Histórico do protótipo anterior
+
 Em 14/10/2026 o usuário determinou: **“só coda agora, nao teste e compile nada ainda”**. A partir dessa instrução, o trabalho segue somente com escrita de código e leitura estática. Não foram iniciados novos testes, builds, compilações, instalações de dependências ou execuções do aplicativo.
 
 ## Evidências anteriores à instrução

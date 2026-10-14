@@ -4,14 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reworkbench"
-version = "0.1.0"
-description = "Bancada desktop de engenharia reversa com Ghidra"
+version = "0.2.0"
+description = "Lançador opcional para a bancada independente C++/Qt"
 requires-python = ">=3.13"
-dependencies = ["PySide6-Essentials>=6.9,<7"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=8.3,<10", "pytest-qt>=4.4,<5"]
-engine = ["pyghidra==3.1.0"]
+legacy = ["PySide6-Essentials>=6.9,<7", "pyghidra==3.1.0"]
 
 [project.gui-scripts]
 reworkbench = "reworkbench.__main__:main"

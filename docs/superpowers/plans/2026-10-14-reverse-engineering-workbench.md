@@ -1,5 +1,7 @@
 # Reverse Engineering Workbench Implementation Plan
 
+> Historical plan for the Python/Ghidra prototype. Superseded by [the independent native workbench plan](2026-10-14-independent-native-workbench.md). Ghidra is inspiration only for the current product.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Entregar uma bancada desktop Windows que importe programas e firmware, apresente análise e pseudocódigo reais, preserve investigações e exporte evidências.

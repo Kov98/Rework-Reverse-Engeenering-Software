@@ -4,23 +4,21 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$environmentRoot = Join-Path $projectRoot '.venv'
-if (-not (Test-Path -LiteralPath (Join-Path $environmentRoot 'Scripts/python.exe'))) {
-    $environmentRoot = Join-Path $projectRoot '.worktrees/implementation/.venv'
+$candidates = @(
+    (Join-Path $projectRoot 'build/bin/reworkbench.exe'),
+    (Join-Path $projectRoot 'native/workbench/build/bin/reworkbench.exe')
+)
+$nativeExe = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+if (-not $nativeExe) {
+    throw 'O aplicativo C++ ainda nao foi compilado. Consulte README.md. Este script nao compila e nao inicia o prototipo Ghidra.'
 }
-$pythonExe = Join-Path $environmentRoot 'Scripts/python.exe'
-if (-not (Test-Path -LiteralPath $pythonExe)) {
-    throw 'Ambiente Python não encontrado. Execute scripts/setup.ps1 quando desejar instalar as dependências.'
-}
-$env:PYTHONPATH = Join-Path $projectRoot 'src'
-$launchArguments = @('-m', 'reworkbench')
-if ($Project) { $launchArguments += $Project }
-if ($Sample) { $launchArguments += @('--sample', $Sample) }
-# Start only when this launcher is explicitly invoked. No compilation or engine
-# provisioning is performed by this script.
+$launchArguments = @()
+if ($Project) { $launchArguments += @('--project', (Resolve-Path -LiteralPath $Project).ProviderPath) }
+if ($Sample) { $launchArguments += @('--sample', (Resolve-Path -LiteralPath $Sample).ProviderPath) }
+# This launcher starts only an existing native executable.
 Push-Location -LiteralPath $projectRoot
 try {
-    & $pythonExe @launchArguments
+    & $nativeExe @launchArguments
     exit $LASTEXITCODE
 } finally {
     Pop-Location

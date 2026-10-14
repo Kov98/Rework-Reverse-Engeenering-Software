@@ -1,3 +1,4 @@
-# Engine bridge shipped with Ghidra 12.1.4. Install only when preparing runtime.
+# Historical Python/Ghidra prototype only; not required by the native C++ product.
+# Engine bridge shipped with Ghidra 12.1.4. Install only when preparing legacy runtime.
 pyghidra==3.1.0
 JPype1==1.5.2

@@ -1,97 +1,84 @@
-# REWorkbench
+﻿# REWorkbench Native
 
-Bancada desktop de engenharia reversa para Windows de 64 bits. A interface usa Qt e coordena o Ghidra em um processo separado para importar binários, analisar funções e gerar pseudocódigo C aproximado.
+Bancada independente de engenharia reversa, com **C++20 como linguagem principal e interface Qt**. Ghidra e uma referencia de produto; o aplicativo nativo nao o utiliza como motor e nao precisa de JVM, PyGhidra ou Python.
 
-O código da primeira versão está implementado na branch `feat/reworkbench`, em `.worktrees/implementation`. **As alterações mais recentes não foram executadas, testadas nem compiladas, conforme solicitado.** O registro de validação anterior está em [docs/validation.md](docs/validation.md), com [decisões e revisão estática](docs/implementation-notes.md).
+Esta entrega contem **codigo-fonte sem testes, compilacao ou execucao**, conforme orientacao do usuario. Ainda nao foi produzido um executavel da aplicacao nativa. O objetivo de evoluir para uma ferramenta superior e de longo prazo; nenhuma superioridade ou paridade industrial foi validada nesta etapa.
 
-## O que está implementado
+## Codigo da aplicacao propria
 
-- Projetos locais com cópia da amostra, SHA-256, banco SQLite, notas e marcadores por endereço.
-- Importação de PE, ELF e Mach-O, escolha de imagem em Mach-O universal e configuração explícita de firmware bruto.
-- Catálogo de linguagens e compiladores do Ghidra, base de memória, entradas e contexto de registradores, incluindo `TMode=1` para Thumb.
-- Exploradores paginados de funções, símbolos, strings definidas, imports e regiões de memória.
-- Assembly, pseudocódigo, referências, histórico de navegação e bytes do arquivo com mapeamento de offsets.
-- Renomeação persistente de funções, cache por revisão e exportação de relatório JSON e pseudocódigo da função selecionada.
-- Pistas de auditoria baseadas em imports `gets`, `strcpy`, `strcat` e `sprintf`, com referências concretas quando disponíveis.
-- Triagem de bytes com núcleo próprio em C++20 para entropia global e strings ASCII; Rust e Python permanecem como alternativas.
-- Operações do motor em fila, limites de tempo, cancelamento, heartbeat e encerramento da árvore de processos no Windows.
+- Carregadores proprios de PE32/PE32+, ELF32/64, Mach-O32/64 e firmware bruto, com escolha explicita de imagem universal e configuracao de arquitetura/base/entrada para raw.
+- Modelo proprio de regioes, entradas, simbolos e imports, com enderecos virtuais separados de offsets do arquivo.
+- Analise propria de funcoes candidatas, chamadas, referencias e blocos de controle a partir das entradas e simbolos suportados.
+- Decodificacao de instrucoes com biblioteca especializada Capstone5, quando disponivel na compilacao. Capstone nao fornece o projeto, a interface, os carregadores, a descoberta de funcoes, o CFG ou a IR desta bancada.
+- IR propria e conservadora por funcao, com contagem de instrucoes modeladas e operacoes opacas explicitas. **Ainda nao e um decompilador de alto nivel completo.**
+- Biblioteca propria C++ de strings ASCII e entropia, usada diretamente pelo nucleo sem processos auxiliares.
+- Interface C++/Qt com exploradores paginados, assembly, IR, grafo de controle com zoom, visor hexadecimal, referencias, busca e historico de navegacao.
+- Projetos nativos com amostras por SHA-256, bloqueio de projeto, SQLite, renomeacoes, notas, marcadores e exportacao JSON/IR.
+- Trabalho em segundo plano, cancelamento, limites de exploracao e descarte de respostas antigas de selecao.
 
-## Iniciar quando desejar executar
+Os detalhes e limites de formatos estao em [loaders.md](native/workbench/docs/loaders.md), os do motor em [analysis.md](native/workbench/docs/analysis.md), e os de persistencia em [projects.md](native/workbench/docs/projects.md).
 
-Requisitos: Windows x64, Python 3.13 x64, Ghidra **12.1.4** e JDK **21 x64**. O motor requer o pacote PyGhidra **3.1.0** correspondente a essa distribuição do Ghidra.
+## Organizacao
 
-Caso o ambiente Python ainda não exista:
-
-```powershell
-.\scripts\setup.ps1
+```text
+CMakeLists.txt                    build nativo principal
+native/workbench/include/         contratos C++ da aplicacao e motor
+native/workbench/src/             carregadores, decoder, analise, IR e SQLite
+native/workbench/ui/              janela Qt, exploradores, hex, importacao e CFG
+native/bytecore_cpp/              biblioteca propria C++ de triagem de bytes
+scripts/run.ps1                  inicia somente o executavel nativo existente
+src/reworkbench/__main__.py       lancador Python opcional para o mesmo executavel
+src/reworkbench/legacy_main.py    entrada explicita do prototipo historico
 ```
 
-Para abrir o aplicativo:
+Os arquivos ficam no worktree `.worktrees/implementation`, branch `feat/reworkbench`. O prototipo Python/Ghidra e seus testes continuam preservados como historico; eles nao fazem parte do caminho padrao do produto. Suas dependencias Python estao isoladas no extra `legacy` e nao sao requisitos da aplicacao C++.
+
+## Preparacao e compilacao futura
+
+**Nenhum dos comandos abaixo foi executado nesta etapa.** Requisitos previstos: compilador e biblioteca padrao C++20, CMake3.20+, Qt6.5+ com Core, Widgets, Concurrent, Sql e o plugin QSQLITE. Capstone5.0.6 e a referencia do decoder opcional. Nao existe download automatico de dependencias no CMake.
+
+Quando a compilacao for autorizada, a partir da raiz deste worktree:
+
+```powershell
+cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/caminho/Qt/versao/msvc_64"
+cmake --build build --config Release
+```
+
+Se Capstone estiver instalado fora dos caminhos padrao, informe os caminhos de headers e biblioteca na configuracao futura:
+
+```powershell
+cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/caminho/Qt/versao/msvc_64" -DREWORKBENCH_CAPSTONE_INCLUDE_DIR="C:/deps/include" -DREWORKBENCH_CAPSTONE_LIBRARY="C:/deps/lib/capstone.lib"
+```
+
+Sem Capstone, o codigo contempla modo parcial de formatos, bytes e strings, sem fingir que assembly ou IR estao disponiveis. Uma versao de API diferente de Capstone5 deve ser adaptada explicitamente. Empacotar o executavel exige tambem disponibilizar os runtimes/plugins Qt e o decoder usado; isso nao foi realizado.
+
+O destino previsto do executavel e `build/bin/reworkbench.exe`. Quando ele existir:
 
 ```powershell
 .\scripts\run.ps1
+.\scripts\run.ps1 -Project "C:/investigacoes/projeto" -Sample "C:/amostras/programa.exe"
 ```
 
-O script também reconhece o ambiente já preparado em `.worktrees/implementation/.venv`. Não baixa o Ghidra nem compila componentes. A interface inicia sem carregar a JVM; o processo do motor é criado quando necessário.
+O lancador nao compila e nao retorna ao motor legado. `scripts/setup.ps1` apenas explica os requisitos nativos; `scripts/doctor.ps1` lista caminhos sem iniciar compilador, aplicativo ou Ghidra.
 
-No aplicativo, abra **Análise → Configurações do motor** e informe as pastas do Ghidra e do JDK. A configuração local existente em `.tools/environment.json` é descoberta automaticamente. Também são aceitas as variáveis `REWORKBENCH_GHIDRA_HOME` e `REWORKBENCH_JAVA_HOME`.
+## Fluxo nativo
 
-O diagnóstico é uma ação separada e somente será executado se você o solicitar pelo botão da interface ou pelo script:
+1. Criar um projeto em pasta vazia ou abrir uma pasta com `project.rwb.json`.
+2. Importar o binario. Para imagens universais, escolher o slice; para firmware bruto, definir arquitetura, ordem dos bytes, base e entrada.
+3. Explorar funcoes, assembly, referencias, bytes, IR e CFG. Campos desconhecidos e semantica nao modelada permanecem explicitos.
+4. Renomear funcoes e registrar notas/marcadores. Salvar notas pelo botao ou Ctrl+S; trocas de projeto/analise, exportacao de relatorio e fechamento tambem persistem rascunhos antes de continuar.
+5. Exportar JSON da investigacao ou IR da funcao, mantendo hash, configuracao, enderecos, estado parcial e avisos.
 
-```powershell
-.\scripts\doctor.ps1
-```
+Projetos nativos e projetos do prototipo usam manifestos diferentes. O programa recusa conversao silenciosa de projetos antigos. Mover uma pasta de projeto nativo rebaseia o caminho da copia da amostra; a proveniencia original permanece registrada separadamente.
 
-## Fluxo de trabalho
+## Limites e evolucao
 
-1. Crie um projeto em uma pasta vazia ou abra uma pasta que contenha `project.json`.
-2. Importe um executável, biblioteca ou firmware. Escolha o formato e a arquitetura apresentados pelo Ghidra. Em um Mach-O universal, selecione uma imagem.
-3. Para firmware bruto, marque `BinaryLoader`, selecione uma linguagem, defina a base e forneça ao menos uma entrada. Exemplo: base `0x8000`, entrada `ram:0x8000`; para Thumb, `ram:0x8000 TMode=1`.
-4. Abra uma função com clique duplo. Use as referências para navegar entre origem e destino, e o assembly para localizar os bytes correspondentes.
-5. Registre notas e marcadores no painel Investigação. As notas são gravadas automaticamente após a edição e também pelo botão Salvar nota.
-6. Exporte os resultados no menu Arquivo. Escolha uma pasta externa ao projeto ou sua subpasta `exports`.
+A qualidade industrial de um decompilador envolve recuperacao de funcoes, tipos, variaveis, convencoes de chamada, SSA, otimizacoes e estruturacao de controle. A IR inicial e uma base para esse trabalho e mantem as operacoes desconhecidas como opacas. Nao recupera o codigo original nem promete gerar codigo recompilavel.
 
-**Examinar bytes** funciona sem Ghidra configurado. A triagem ASCII é independente das strings definidas pela análise do motor. Entropia alta pode ter várias causas e não constitui uma classificação automática de conteúdo.
+Os limites iniciais sao 200.000 instrucoes globais, 4.096 por funcao, 10.000 funcoes, 300 segundos de analise, 10.000 strings e previsualizacoes de 4.096 caracteres; tabelas mostram 200 linhas por pagina e o hex le ate 64 KiB por intervalo. Limites e cancelamento produzem resultados parciais quando disponiveis. Desempenho real e comportamento de fechamento ainda precisam de validacao dinamica.
 
-## Organização técnica
+Ha restricoes especificas para imports, relocacoes, arquiteturas mistas e delay slots, documentadas nos arquivos do nucleo. Depuracao, emulacao, patching, unpacking, comparacao binaria, colaboracao e plugins publicos permanecem etapas futuras. Nenhuma amostra e executada pelo analisador.
 
-| Tecnologia | Papel |
-|---|---|
-| Python / PySide6 | Interface desktop, coordenação, protocolo, exportação e alternativa para triagem de bytes |
-| Java / PyGhidra | Importadores, modelo do programa e autoanálise do Ghidra |
-| C++20 | Núcleo próprio `native/bytecore_cpp`: biblioteca de análise de bytes e CLI JSON, integrada como auxiliar nativo prioritário da triagem |
-| C / C++ do Ghidra | Componentes de decompilação fornecidos pelo motor externo; as fixtures próprias também incluem C |
-| SLEIGH | Especificações de processadores e semântica das instruções fornecidas pelo Ghidra |
-| Rust | Código do auxiliar opcional `native/bytecore`; nenhum executável gerado nesta etapa |
-| Assembly | Fontes próprias das amostras ARM, Thumb e MIPS em `tests/fixtures` |
-| SQL / SQLite | Índice dos registros, anotações, revisões e cache local |
-| Gradle | Build do projeto Ghidra original; esta bancada utiliza uma distribuição pronta |
+Veja a [especificacao vigente](docs/superpowers/specs/2026-10-14-independent-native-workbench-design.md), o [plano nativo](docs/superpowers/plans/2026-10-14-independent-native-workbench.md) e o [estado de validacao](docs/validation.md).
 
-O produto não precisa reconstruir o Ghidra com Gradle. Os componentes Java, C/C++ e as especificações SLEIGH do Ghidra pertencem à distribuição do motor. O núcleo C++20 em `native/bytecore_cpp` é código próprio da bancada e tem uma responsabilidade separada: triagem de bytes.
-
-O módulo C++ está escrito e integrado à seleção do processador nativo, mas continua **sem compilar**. Quando seu executável estiver disponível, será preferido ao auxiliar Rust. Na ausência de auxiliares nativos, a triagem usa Python; uma falha do auxiliar escolhido também recorre a Python. Consulte os caminhos e o contrato no [README do núcleo C++](native/bytecore_cpp/README.md).
-
-As tabelas carregam páginas de 200 registros e mantêm até 1.000 linhas por intervalo na memória. Use Anterior / Próximos para percorrer todos os resultados. Strings definidas têm prévia de até 4.096 caracteres; o relatório indica quando houve truncamento, e os bytes da amostra continuam disponíveis no visor.
-
-```text
-src/reworkbench/
-  application/  sessão, auditoria, exportação e triagem
-  domain.py     endereços estruturados, opções e mensagens
-  engine/       supervisor, worker e integração Ghidra
-  project/      amostras, bloqueio do projeto e SQLite
-  ui/           janela Qt, exploradores, código, hex e notas
-native/bytecore_cpp/ núcleo próprio C++20, CMake, biblioteca e CLI, ainda sem compilar
-native/bytecore/     auxiliar Rust opcional, ainda sem compilar
-scripts/        instalação, inicialização e diagnóstico
-docs/           arquitetura, plano e estado de validação
-```
-
-## Limites desta versão
-
-Decompilação não recupera integralmente o código original. Comentários, nomes e tipos podem ter sido removidos; otimizações e ofuscação podem alterar bastante a representação. As pistas de auditoria exigem investigação manual.
-
-Esta versão concentra-se em análise estática. Não implementa depurador, execução de amostras, desempacotamento genérico, emulação, recuperação automática de projetos originais, colaboração remota ou instalação de plugins. O leitor inicial de contêiner Mach-O universal cobre o cabeçalho FAT32 big-endian; FAT64 e cabeçalhos FAT com endianness invertido ainda não têm seleção de imagem implementada.
-
-A persistência semântica é feita no projeto Ghidra, enquanto SQLite mantém o índice e as anotações. Em caso de interrupção do motor, a reabertura reconcilia o índice com o programa salvo. Arquivos em regiões sem correspondência na amostra, como memória não inicializada, não recebem um offset artificial.
-
-Veja [a arquitetura aprovada](docs/superpowers/specs/2026-10-14-reverse-engineering-workbench-design.md), o [núcleo C++20](native/bytecore_cpp/README.md) e o [auxiliar Rust](native/bytecore/README.md). Ghidra é um projeto externo distribuído sob sua própria licença: [repositório oficial](https://github.com/NationalSecurityAgency/ghidra).
+Referencias das dependencias especializadas: [Qt Widgets](https://doc.qt.io/qt-6/qtwidgets-index.html), [Capstone5.0.6](https://github.com/capstone-engine/capstone/tree/5.0.6). O codigo proprio permanece separado dessas bibliotecas.
