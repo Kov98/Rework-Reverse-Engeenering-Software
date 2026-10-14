@@ -54,7 +54,7 @@ int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("REWorkbench"));
     QCoreApplication::setApplicationName(QStringLiteral("REWorkbench Native"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.3.0"));
     apply_theme(application);
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Bancada independente de engenharia reversa em C++"));

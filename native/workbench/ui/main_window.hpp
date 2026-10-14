@@ -43,6 +43,7 @@ private:
         Probe probe;
         QString message;
         QString error;
+        QJsonObject data;
         bool cancelled = false;
     };
     using Work = std::function<TaskResult(std::stop_token, ProgressCallback)>;
@@ -79,6 +80,15 @@ private:
     void update_bookmarks();
     void update_audit();
     void about();
+    void export_pseudocode();
+    void compare_binary();
+    void export_patch();
+    void emulate_selection();
+    void import_symbols();
+    void show_enrichment();
+    void show_extensions();
+    void show_debugger();
+    void show_tool_result(const QString& title, const QJsonObject& result);
 
     QSettings settings_;
     std::shared_ptr<Project> project_;
@@ -111,6 +121,9 @@ private:
     QLabel* function_heading_;
     QLabel* ir_status_;
     QPlainTextEdit* ir_;
+    QPlainTextEdit* pseudocode_;
+    QPlainTextEdit* ssa_;
+    QLabel* decompiler_status_;
     Explorer* assembly_;
     Explorer* references_;
     GraphView* graph_;

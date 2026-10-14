@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -39,6 +40,8 @@ struct OpenOptions {
     quint64 raw_base = 0;
     QVector<Address> entries;
     std::optional<quint32> slice_index;
+    QString symbol_map_path;
+    QString symbol_map_sha256;
 };
 
 struct Region {
@@ -115,6 +118,7 @@ struct Instruction {
     FlowKind flow = FlowKind::Normal;
     std::optional<Address> direct_target;
     std::optional<Address> memory_target;
+    QVector<Address> indirect_targets;
     bool falls_through = true;
     quint32 native_id = 0;
 };
@@ -163,7 +167,8 @@ struct AnalysisSnapshot {
     double entropy = 0;
     bool strings_truncated = false;
     QString state = QStringLiteral("ready");
-    QString engine_version = QStringLiteral("reworkbench-native-0.2");
+    QString engine_version = QStringLiteral("reworkbench-native-0.3");
+    QJsonObject enrichment;
     QStringList capabilities;
     QStringList warnings;
     quint64 revision = 0;

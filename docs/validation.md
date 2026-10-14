@@ -1,6 +1,16 @@
 # Estado de implementação e validação
 
-## Versão principal nativa em C++20/Qt
+## Ampliação nativa 0.3
+
+Código acrescentado: decompilador escalar x86/x64 com SSA e propagação conservadora; enriquecimento PE/ELF e linhas DWARF 2–4; mapas de símbolos; resolução indireta limitada; comparação binária/de funções; patch em cópia; interpretador escalar; depurador Windows; SDK de extensões; CLI; cache por conteúdo e reaproveitamento de análise compatível. Todos são código-fonte integrado ao CMake e aos fluxos documentados, **sem configuração, compilação, testes, execução, instalação ou carregamento de extensão nesta etapa**.
+
+A revisão desta ampliação foi leitura de fonte pelos implementadores e pelo agente principal. A revisão independente do conjunto não terminou porque o serviço dos subagentes atingiu o limite de uso; nenhuma conclusão de aprovação foi recebida para o conjunto 0.3. As revisões independentes registradas nas seções anteriores pertencem a entregas anteriores.
+
+Além dos itens nativos abaixo, a aceitação posterior deve cobrir SSA/phi em junções e backedges, flags e registradores parciais, invalidação opaca, cópias simultâneas, condições simplificadas, limites de saída, alvos indiretos e relocações, linhas DWARF malformadas, mapa com identidade divergente, reabertura/movimentação de projetos com mapas e cache, patch entre blocos e aliases, emulação com entradas desconhecidas, depuração em cada fase do ciclo de vida e contratos de extensões. O harness `benchmark` foi apenas escrito: não há tempos, uso de memória ou resultados comparativos obtidos.
+
+Ainda faltam capacidades importantes de um produto completo: tipos/assinaturas/ABI e variáveis de alto nível, semântica ampla das ISAs, análise interprocedural, switches/laços gerais, PDB completo, DWARF5 e arquitetura mista por endereço. Código e revisão estática não sustentam afirmação de superioridade sobre o Ghidra.
+
+## Base nativa 0.2 em C++20/Qt e aceitação ainda pendente
 
 A direção atual está em [independent-native-workbench-design.md](superpowers/specs/2026-10-14-independent-native-workbench-design.md). O executável principal tem interface C++/Qt, carregadores próprios, descoberta de funções, referências, CFG e IR próprios, com Capstone 5 opcional para decodificar instruções. O caminho padrão não inicia Python, Ghidra ou JVM. Os registros mais abaixo descrevem o protótipo anterior e não validam esta versão nativa.
 

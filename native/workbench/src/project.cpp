@@ -1,5 +1,6 @@
 #include "reworkbench/project.hpp"
 #include "serialization.hpp"
+#include "reworkbench/analysis.hpp"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -228,6 +229,22 @@ void create_database_schema(QSqlDatabase& database) {
     transaction.commit();
 }
 
+bool has_table(QSqlDatabase& database, const QString& name) {
+    QSqlQuery query(database);
+    prepare(query, QStringLiteral("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?"));
+    query.addBindValue(name); execute(query); return query.next();
+}
+
+QString reuse_key(const QString& sha256, const OpenOptions& options, const QString& engine) {
+    QJsonArray entries;
+    for (const auto& entry : options.entries) entries.append(persistence::address_json(entry));
+    const QJsonObject object{{"sha256", sha256}, {"engine", engine}, {"decoder", decoder_description()}, {"raw", options.raw},
+        {"architecture", int(options.raw_architecture)}, {"endian", int(options.raw_byte_order)},
+        {"base", hex(options.raw_base)}, {"entries", entries}, {"symbol_map_sha256", options.symbol_map_sha256},
+        {"slice", options.slice_index ? QJsonValue(hex(*options.slice_index)) : QJsonValue(QJsonValue::Null)}};
+    return QString::fromLatin1(QCryptographicHash::hash(QJsonDocument(object).toJson(QJsonDocument::Compact), QCryptographicHash::Sha256).toHex());
+}
+
 QByteArray hash_file(QFile& input, std::stop_token stop, QSaveFile* output = nullptr, quint64* size = nullptr) {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     quint64 count = 0;
@@ -386,6 +403,14 @@ AnalysisSnapshot load_snapshot(const QString& root, QSqlDatabase& database, cons
     // source_path always names the actual bytes, rebased when a project folder moves.
     // Original provenance is persisted separately and never used to open the analyzed file.
     snapshot.metadata.source_path = sample_path;
+    if (!snapshot.options.symbol_map_sha256.isEmpty()) {
+        if (!valid_hash(snapshot.options.symbol_map_sha256)) fail(QStringLiteral("Hash do mapa de símbolos inválido."));
+        const auto map_path = internal_path(root, QStringLiteral("samples/") + snapshot.options.symbol_map_sha256 + QStringLiteral(".bin"));
+        const QFileInfo map_info(map_path);
+        if (!map_info.isFile() || map_info.size() < 0 || map_info.size() > 16 * 1024 * 1024) fail(QStringLiteral("Mapa de símbolos ausente ou excessivo."));
+        verify_sample(map_path, snapshot.options.symbol_map_sha256, quint64(map_info.size()), stop);
+        snapshot.options.symbol_map_path = map_path;
+    }
     snapshot.metadata.original_name = original_name;
     snapshot.revision = revision;
     annotation_budget(database, id, true, stop);
@@ -645,6 +670,8 @@ QString Project::save_new_analysis(const Sample& sample, const AnalysisSnapshot&
     check_cancelled(stop);
     if (!valid_hash(sample.sha256) || sample.relative_path != QStringLiteral("samples/") + sample.sha256 + QStringLiteral(".bin"))
         fail(QStringLiteral("Amostra inválida para este projeto."));
+    if (!snapshot.metadata.sha256.isEmpty() && snapshot.metadata.sha256 != sample.sha256)
+        fail(QStringLiteral("A identidade da análise não corresponde à amostra."));
     const auto path = internal_path(root_, sample.relative_path);
     reject_shared_file(path);
     if (!QFileInfo(path).isFile() || quint64(QFileInfo(path).size()) != sample.size) fail(QStringLiteral("Cópia da amostra ausente ou alterada."));
@@ -662,6 +689,15 @@ QString Project::save_new_analysis(const Sample& sample, const AnalysisSnapshot&
         fail(QStringLiteral("Importe a amostra neste projeto antes de persistir a análise."));
     provenance.finish();
     auto stored = snapshot;
+    if (stored.options.symbol_map_path.isEmpty() != stored.options.symbol_map_sha256.isEmpty()) fail(QStringLiteral("Mapa de símbolos exige caminho e hash juntos."));
+    if (!stored.options.symbol_map_sha256.isEmpty()) {
+        if (!valid_hash(stored.options.symbol_map_sha256)) fail(QStringLiteral("Hash de mapa de símbolos inválido."));
+        const auto map = internal_path(root_, QStringLiteral("samples/") + stored.options.symbol_map_sha256 + QStringLiteral(".bin"));
+        const auto info = QFileInfo(map);
+        if (!info.isFile() || info.size() < 0 || info.size() > 16 * 1024 * 1024) fail(QStringLiteral("Importe o mapa de símbolos no projeto antes de salvar."));
+        verify_sample(map, stored.options.symbol_map_sha256, quint64(info.size()), stop);
+        stored.options.symbol_map_path = map;
+    }
     stored.metadata.source_path = path;
     stored.metadata.original_name = sample.original_name;
     stored.metadata.sha256 = sample.sha256;
@@ -695,6 +731,13 @@ QString Project::save_new_analysis(const Sample& sample, const AnalysisSnapshot&
         execute(function);
     }
     check_cancelled(stop);
+    if (stored.state == QStringLiteral("ready")) {
+        execute(database, QStringLiteral("CREATE TABLE IF NOT EXISTS analysis_reuse(cache_key TEXT PRIMARY KEY,analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE)"));
+        QSqlQuery cache(database);
+        prepare(cache, QStringLiteral("INSERT INTO analysis_reuse(cache_key,analysis_id) VALUES(?,?) ON CONFLICT(cache_key) DO UPDATE SET analysis_id=excluded.analysis_id"));
+        cache.addBindValue(reuse_key(sample.sha256, stored.options, stored.engine_version));
+        cache.addBindValue(id); execute(cache);
+    }
     transaction.commit();
     return id;
 }
@@ -834,6 +877,112 @@ void Project::export_ir(const QString& analysis_id, Address address, const QStri
         "// analysis=%1 revision=%2 function=%3 source_sha256=%4\n\n").arg(analysis_id, revision, address.text(), source_hash);
     const auto path = protected_export_path(root_, database, destination, stop);
     atomic_bytes(path, (header + text).toUtf8(), stop);
+}
+
+std::optional<QString> Project::reusable_analysis(const Sample& sample, const OpenOptions& options, std::stop_token stop) const {
+    std::lock_guard guard(mutex_); check_cancelled(stop);
+    Connection connection(root_); auto& database = connection.database();
+    if (!has_table(database, QStringLiteral("analysis_reuse"))) return {};
+    QSqlQuery query(database);
+    prepare(query, QStringLiteral("SELECT analysis_id FROM analysis_reuse WHERE cache_key=?"));
+    query.addBindValue(reuse_key(sample.sha256, options, AnalysisSnapshot{}.engine_version)); execute(query);
+    if (!query.next()) return {};
+    const auto id = query.value(0).toString(); valid_analysis_id(id); check_cancelled(stop); return id;
+}
+
+std::optional<QJsonObject> Project::cached_result(const QString& key, std::stop_token stop) const {
+    std::lock_guard guard(mutex_); check_cancelled(stop);
+    if (!valid_hash(key)) fail(QStringLiteral("Chave de cache inválida."));
+    Connection connection(root_); auto& database = connection.database();
+    if (!has_table(database, QStringLiteral("derived_cache"))) return {};
+    QSqlQuery query(database);
+    prepare(query, QStringLiteral("SELECT length(payload) FROM derived_cache WHERE cache_key=?"));
+    query.addBindValue(key); execute(query);
+    if (!query.next()) return {};
+    const auto size = query.value(0).toLongLong();
+    if (size <= 0 || size > 16 * 1024 * 1024) return {};
+    query.finish();
+    prepare(query, QStringLiteral("SELECT payload FROM derived_cache WHERE cache_key=? AND length(payload)<=16777216"));
+    query.addBindValue(key); execute(query);
+    if (!query.next()) return {};
+    const auto payload = query.value(0).toByteArray();
+    if (payload.size() != size) return {};
+    check_cancelled(stop);
+    QJsonParseError error; const auto document = QJsonDocument::fromJson(payload, &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) return {};
+    return document.object();
+}
+
+void Project::cache_result(const QString& key, const QJsonObject& result, std::stop_token stop) {
+    std::lock_guard guard(mutex_); check_cancelled(stop);
+    if (!valid_hash(key)) fail(QStringLiteral("Chave de cache inválida."));
+    const auto bytes = QJsonDocument(result).toJson(QJsonDocument::Compact);
+    if (bytes.size() > 16 * 1024 * 1024) return;
+    Connection connection(root_); auto& database = connection.database(); Transaction transaction(database);
+    execute(database, QStringLiteral("CREATE TABLE IF NOT EXISTS derived_cache(cache_key TEXT PRIMARY KEY,payload BLOB NOT NULL,created_utc TEXT NOT NULL)"));
+    QSqlQuery query(database);
+    prepare(query, QStringLiteral("INSERT INTO derived_cache(cache_key,payload,created_utc) VALUES(?,?,?) ON CONFLICT(cache_key) DO UPDATE SET payload=excluded.payload,created_utc=excluded.created_utc"));
+    query.addBindValue(key); query.addBindValue(bytes); query.addBindValue(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)); execute(query); query.finish();
+    // Derived data is disposable; enforce 256 MiB and 1024 entries per project.
+    for (;;) {
+        check_cancelled(stop);
+        if (!query.exec(QStringLiteral("SELECT count(*),coalesce(sum(length(payload)),0) FROM derived_cache")) || !query.next()) fail(query.lastError().text());
+        const bool oversized = query.value(0).toLongLong() > 1024 || query.value(1).toLongLong() > 256 * 1024 * 1024;
+        query.finish(); if (!oversized) break;
+        execute(database, QStringLiteral("DELETE FROM derived_cache WHERE cache_key=(SELECT cache_key FROM derived_cache ORDER BY created_utc,cache_key LIMIT 1)"));
+    }
+    transaction.commit();
+}
+
+void Project::export_artifact(const QString& id, const QByteArray& bytes, const QString& destination, std::stop_token stop) const {
+    std::lock_guard guard(mutex_);
+    if (bytes.size() > 16 * 1024 * 1024) fail(QStringLiteral("Artefato excede 16 MiB."));
+    Connection connection(root_); auto& database = connection.database();
+    (void)load_snapshot(root_, database, id, stop);
+    atomic_bytes(protected_export_path(root_, database, destination, stop), bytes, stop);
+}
+
+QStringList Project::protected_sources(std::stop_token stop) const {
+    std::lock_guard guard(mutex_); Connection connection(root_); QSqlQuery query(connection.database());
+    query.setForwardOnly(true);
+    if (!query.exec(QStringLiteral("SELECT CASE WHEN length(CAST(path AS BLOB))<=131072 THEN path ELSE NULL END FROM sample_origins"))) fail(query.lastError().text());
+    QStringList paths; qsizetype total = 0;
+    while (query.next()) {
+        check_cancelled(stop);
+        if (paths.size() >= 100000 || query.value(0).isNull()) fail(QStringLiteral("Índice de origens excessivo ou inválido."));
+        const auto path = query.value(0).toString(); total += path.size();
+        if (total > 16 * 1024 * 1024) fail(QStringLiteral("Origens excedem o limite total de texto."));
+        paths.append(path);
+    }
+    return paths;
+}
+
+Sample Project::analysis_sample(const QString& id, std::stop_token stop) const {
+    std::lock_guard guard(mutex_); valid_analysis_id(id); check_cancelled(stop);
+    Connection connection(root_); QSqlQuery query(connection.database());
+    prepare(query, QStringLiteral("SELECT a.sha256,s.relative_path,s.size,CASE WHEN length(CAST(a.original_path AS BLOB))<=131072 THEN a.original_path ELSE NULL END,CASE WHEN length(CAST(o.original_name AS BLOB))<=131072 THEN o.original_name ELSE NULL END FROM analyses a JOIN samples s ON s.sha256=a.sha256 JOIN sample_origins o ON o.sha256=a.sha256 AND o.path=a.original_path WHERE a.id=?"));
+    query.addBindValue(id); execute(query);
+    if (!query.next() || query.value(3).isNull() || query.value(4).isNull()) fail(QStringLiteral("Proveniência inválida ou análise inexistente."));
+    Sample sample{query.value(0).toString(), query.value(1).toString(), query.value(3).toString(), query.value(4).toString(), persistence::unsigned_hex(query.value(2).toString())};
+    if (!valid_hash(sample.sha256) || sample.relative_path != QStringLiteral("samples/") + sample.sha256 + QStringLiteral(".bin")) fail(QStringLiteral("Amostra inválida no índice."));
+    verify_sample(internal_path(root_, sample.relative_path), sample.sha256, sample.size, stop); return sample;
+}
+
+void Project::inherit_annotations(const QString& from, const QString& to, std::stop_token stop) {
+    std::lock_guard guard(mutex_); valid_analysis_id(from); valid_analysis_id(to); check_cancelled(stop);
+    if (from == to) return;
+    Connection connection(root_); auto& database = connection.database(); Transaction transaction(database);
+    QSqlQuery query(database);
+    prepare(query, QStringLiteral("SELECT 1 FROM analyses a JOIN analyses b ON a.sha256=b.sha256 WHERE a.id=? AND b.id=?"));
+    query.addBindValue(from); query.addBindValue(to); execute(query);
+    if (!query.next()) fail(QStringLiteral("Anotações só podem ser herdadas entre análises da mesma amostra."));
+    query.finish(); annotation_budget(database, from, false, stop); annotation_budget(database, from, true, stop);
+    prepare(query, QStringLiteral("INSERT INTO notes(analysis_id,address_space,address,text,bookmarked) SELECT ?,address_space,address,text,bookmarked FROM notes WHERE analysis_id=? ON CONFLICT(analysis_id,address_space,address) DO NOTHING"));
+    query.addBindValue(to); query.addBindValue(from); execute(query); query.finish(); check_cancelled(stop);
+    prepare(query, QStringLiteral("INSERT INTO function_names(analysis_id,address_space,address,name) SELECT ?,n.address_space,n.address,n.name FROM function_names n JOIN function_addresses f ON f.analysis_id=? AND f.address_space=n.address_space AND f.address=n.address WHERE n.analysis_id=? ON CONFLICT(analysis_id,address_space,address) DO NOTHING"));
+    query.addBindValue(to); query.addBindValue(to); query.addBindValue(from); execute(query); query.finish();
+    annotation_budget(database, to, false, stop); annotation_budget(database, to, true, stop);
+    bump_revision(database, to); check_cancelled(stop); transaction.commit();
 }
 
 } // namespace reworkbench

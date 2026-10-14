@@ -26,6 +26,7 @@ HexView::HexView(QWidget* parent) : QWidget(parent) {
     bar->addWidget(previous);
     bar->addWidget(next);
     detail_ = new QLabel;
+    detail_->setTextFormat(Qt::PlainText);
     bar->addWidget(detail_, 1);
     layout->addLayout(bar);
     text_ = new QPlainTextEdit;

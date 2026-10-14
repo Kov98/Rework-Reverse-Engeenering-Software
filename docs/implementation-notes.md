@@ -1,6 +1,18 @@
 # Decisões e revisão estática
 
-## Aplicação independente em C++20/Qt
+## Ampliação 0.3 e limites desta entrega
+
+O usuário pediu implementação de todo o roteiro de evolução. O código foi dividido em decompilação, enriquecimento e ferramentas de investigação, com integração da interface, CLI e persistência pelo agente principal. O objetivo completo continua maior que o subconjunto semântico entregue: a documentação de cada módulo lista explicitamente as capacidades ainda ausentes. Não se declara paridade com Ghidra nem decompilação de alto nível completa.
+
+O decompilador modela valores de largura fixa, memória e estado arquitetural em SSA; chamadas e instruções desconhecidas invalidam o estado, sem adivinhar ABI. A recuperação indireta usa fatos locais, mapeamentos somente leitura e inventário de relocação; inventário incompleto bloqueia leituras de ponteiros estáticos. Os destinos ficam em `Instruction.indirect_targets` como candidatos, sem converter o operando indireto original em um salto direto válido para qualquer estado de entrada. O decompilador e o interpretador mantêm a operação indireta explícita/não suportada. Tabelas aceitas exigem um padrão restrito com limite no caminho, sem extrapolar de comparação de 32 bits para índice de 64 bits. Outros predecessores podem produzir destinos adicionais e a função permanece parcial.
+
+Projeto reutiliza somente análise `ready` compatível com hash, opções, motor e decoder. Cache de decompilação é derivado e limitado; não substitui validação. Mapas são copiados por hash e rebaseados na reabertura. Reanálise herda notas e nomes compatíveis em transação; não há análise incremental por regiões de bytes alterados nesta versão.
+
+Patch e comparação recalculam hashes e verificam os caminhos atuais para detectar substituição comum durante a operação. Patch protege origens registradas, cópias e aliases de arquivos internos e usa cópia atômica. O interpretador não inicia a amostra. Depurador e extensão só executam código mediante ação explícita no produto; nenhum deles foi executado durante o desenvolvimento.
+
+A revisão independente do conjunto foi solicitada, mas o subagente encerrou por limite de uso antes de apresentar achados. A revisão disponível nesta etapa é do código pelos implementadores e pelo agente principal. Testes, compilação, configuração, execução e instalações continuam suspensos. O estado detalhado está em [validation.md](validation.md).
+
+## Histórico da base independente 0.2 em C++20/Qt
 
 Após o usuário esclarecer que Ghidra é somente inspiração, a aplicação principal foi reescrita em C++20/Qt. A especificação e o plano atuais são os documentos `2026-10-14-independent-native-workbench-*`. O ponto de entrada principal é `native/workbench/src/main.cpp`; `scripts/run.ps1` procura exclusivamente o executável nativo. O ponto de entrada Python é apenas um lançador opcional. `legacy_main.py`, os módulos Python antigos e as dependências opcionais `legacy` preservam o protótipo anterior fora do caminho padrão.
 

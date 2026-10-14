@@ -1,5 +1,6 @@
 #include "reworkbench/binary_image.hpp"
 #include <QFileInfo>
+#include <algorithm>
 
 #include <filesystem>
 #include <limits>
@@ -41,13 +42,33 @@ QByteArray BinaryFile::read(quint64 offset, quint64 length) const {
         file_error(QStringLiteral("Offset excede a capacidade de leitura da plataforma."));
     if (length == 0) return {};
     std::lock_guard lock(mutex_);
-    stream_.clear();
-    stream_.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
-    if (!stream_) file_error(QStringLiteral("Falha ao posicionar leitura do arquivo."));
-    QByteArray result(static_cast<qsizetype>(length), '\0');
-    stream_.read(result.data(), static_cast<std::streamsize>(length));
-    if (stream_.gcount() != static_cast<std::streamsize>(length) || !stream_)
-        file_error(QStringLiteral("Arquivo truncado ou alterado durante a leitura."));
+    const auto exact = [&](quint64 at, quint64 count) {
+        stream_.clear(); stream_.seekg(static_cast<std::streamoff>(at), std::ios::beg);
+        if (!stream_) file_error(QStringLiteral("Falha ao posicionar leitura do arquivo."));
+        QByteArray bytes(static_cast<qsizetype>(count), '\0');
+        stream_.read(bytes.data(), static_cast<std::streamsize>(count));
+        if (stream_.gcount() != static_cast<std::streamsize>(count) || !stream_)
+            file_error(QStringLiteral("Arquivo truncado ou alterado durante a leitura."));
+        return bytes;
+    };
+    if (length > 256) return exact(offset, length);
+    // Four 64-KiB pages avoid a seek/read per instruction without mapping the
+    // whole sample. The analyzed project copy must remain immutable.
+    constexpr quint64 page_size = 65536;
+    QByteArray result;
+    quint64 cursor = offset;
+    while (quint64(result.size()) < length) {
+        const quint64 page = cursor / page_size * page_size;
+        if (!pages_.contains(page)) {
+            if (recent_pages_.size() == 4) pages_.remove(recent_pages_.takeFirst());
+            pages_.insert(page, exact(page, std::min(page_size, size_ - page)));
+        } else recent_pages_.removeAll(page);
+        recent_pages_.append(page);
+        const auto& bytes = pages_[page];
+        const quint64 relative = cursor - page;
+        const quint64 count = std::min(length - quint64(result.size()), quint64(bytes.size()) - relative);
+        result.append(bytes.constData() + relative, qsizetype(count)); cursor += count;
+    }
     return result;
 }
 

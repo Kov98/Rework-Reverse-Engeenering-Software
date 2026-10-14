@@ -26,6 +26,13 @@ public:
                        std::stop_token stop = {}) const;
     void export_ir(const QString& analysis_id, Address address, const QString& text,
                    const QString& destination, std::stop_token stop = {}) const;
+    [[nodiscard]] std::optional<QString> reusable_analysis(const Sample&, const OpenOptions&, std::stop_token = {}) const;
+    [[nodiscard]] std::optional<QJsonObject> cached_result(const QString& key, std::stop_token = {}) const;
+    void cache_result(const QString& key, const QJsonObject& result, std::stop_token = {});
+    void export_artifact(const QString& analysis_id, const QByteArray& bytes, const QString& destination, std::stop_token = {}) const;
+    [[nodiscard]] QStringList protected_sources(std::stop_token = {}) const;
+    [[nodiscard]] Sample analysis_sample(const QString& analysis_id, std::stop_token = {}) const;
+    void inherit_annotations(const QString& from, const QString& to, std::stop_token = {});
 private:
     explicit Project(QString root);
     void initialize(bool create);

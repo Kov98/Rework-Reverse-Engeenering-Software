@@ -1,5 +1,7 @@
 #pragma once
 #include "reworkbench/types.hpp"
+#include <QMap>
+#include <QList>
 
 #include <fstream>
 #include <memory>
@@ -19,6 +21,8 @@ private:
     quint64 size_ = 0;
     mutable std::ifstream stream_;
     mutable std::mutex mutex_;
+    mutable QMap<quint64, QByteArray> pages_;
+    mutable QList<quint64> recent_pages_;
 };
 
 [[nodiscard]] Probe probe_binary(const std::shared_ptr<BinaryFile>& file);

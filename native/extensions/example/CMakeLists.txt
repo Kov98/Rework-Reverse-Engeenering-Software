@@ -1,0 +1,8 @@
+add_library(reworkbench_example_extension MODULE example_extension.cpp)
+set_target_properties(reworkbench_example_extension PROPERTIES AUTOMOC ON)
+target_include_directories(reworkbench_example_extension PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../workbench/include")
+target_link_libraries(reworkbench_example_extension PRIVATE Qt6::Core)
+target_compile_features(reworkbench_example_extension PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(reworkbench_example_extension PRIVATE /utf-8)
+endif()

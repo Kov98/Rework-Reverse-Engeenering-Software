@@ -109,6 +109,7 @@ QJsonObject options_json(const OpenOptions& options) {
     return {{"raw", options.raw}, {"raw_architecture", int(options.raw_architecture)},
             {"raw_byte_order", int(options.raw_byte_order)}, {"raw_base", hex(options.raw_base)},
             {"entries", addresses(options.entries)},
+            {"symbol_map_path", options.symbol_map_path}, {"symbol_map_sha256", options.symbol_map_sha256},
             {"slice_index", options.slice_index ? QJsonValue(hex(*options.slice_index)) : QJsonValue(QJsonValue::Null)}};
 }
 
@@ -119,6 +120,8 @@ OpenOptions read_options(const QJsonObject& object) {
     result.raw_byte_order = static_cast<ByteOrder>(integer(object, "raw_byte_order", 0, 1));
     result.raw_base = number(object, "raw_base");
     result.entries = read_addresses(field(object, "entries"));
+    if (object.contains(QStringLiteral("symbol_map_path"))) result.symbol_map_path = string(object, "symbol_map_path", 131072);
+    if (object.contains(QStringLiteral("symbol_map_sha256"))) result.symbol_map_sha256 = string(object, "symbol_map_sha256", 64);
     const auto slice = field(object, "slice_index");
     if (!slice.isNull()) {
         const auto index = unsigned_hex(string(slice, 18));
@@ -202,6 +205,7 @@ QJsonObject instruction_json(const Instruction& instruction) {
         {"mnemonic", instruction.mnemonic}, {"operands_text", instruction.operands_text}, {"operands", operands},
         {"flow", int(instruction.flow)}, {"direct_target", optional_address(instruction.direct_target)},
         {"memory_target", optional_address(instruction.memory_target)}, {"falls_through", instruction.falls_through},
+        {"indirect_targets", addresses(instruction.indirect_targets)},
         {"native_id", hex(instruction.native_id)}};
 }
 
@@ -228,6 +232,7 @@ Instruction read_instruction(const QJsonObject& object) {
         result.operands.append(std::move(operand));
     }
     result.flow = static_cast<FlowKind>(integer(object, "flow", 0, int(FlowKind::Trap)));
+    if (object.contains(QStringLiteral("indirect_targets"))) result.indirect_targets = read_addresses(object.value(QStringLiteral("indirect_targets")), 256);
     result.direct_target = read_optional_address(field(object, "direct_target"));
     result.memory_target = read_optional_address(field(object, "memory_target"));
     result.falls_through = boolean(object, "falls_through");
@@ -303,7 +308,8 @@ QJsonObject snapshot_json(const AnalysisSnapshot& snapshot, std::stop_token stop
     return {{"schema", 1}, {"metadata", metadata_json(snapshot.metadata, stop)}, {"options", options_json(snapshot.options)},
         {"functions", functions}, {"references", references}, {"strings", byte_strings}, {"entropy", snapshot.entropy},
         {"strings_truncated", snapshot.strings_truncated}, {"state", snapshot.state}, {"engine_version", snapshot.engine_version},
-        {"capabilities", strings(snapshot.capabilities)}, {"warnings", strings(snapshot.warnings)}, {"revision", hex(snapshot.revision)}};
+        {"capabilities", strings(snapshot.capabilities)}, {"warnings", strings(snapshot.warnings)}, {"revision", hex(snapshot.revision)},
+        {"enrichment", snapshot.enrichment}};
 }
 
 AnalysisSnapshot snapshot_from_json(const QJsonObject& object, std::stop_token stop) {
@@ -368,6 +374,7 @@ AnalysisSnapshot snapshot_from_json(const QJsonObject& object, std::stop_token s
     result.capabilities = read_strings(field(object, "capabilities"));
     result.warnings = read_strings(field(object, "warnings"));
     result.revision = number(object, "revision");
+    if (object.contains(QStringLiteral("enrichment"))) result.enrichment = persistence::object(object.value(QStringLiteral("enrichment")));
     return result;
 }
 

@@ -1,8 +1,12 @@
 #include "reworkbench/analysis.hpp"
 #include "reworkbench/bytecore.hpp"
 #include "decoder.hpp"
+#include "flow_recovery.hpp"
+#include "reworkbench/enrichment.hpp"
 
 #include <QSet>
+#include <QCryptographicHash>
+#include <QJsonArray>
 
 #include <algorithm>
 #include <condition_variable>
@@ -98,6 +102,8 @@ void build_blocks(Function& function, std::stop_token stop) {
     for (qsizetype n = 0; n < function.instructions.size(); ++n) {
         const auto& instruction = function.instructions[n];
         if (instruction.direct_target && instruction.flow != FlowKind::Call && instruction.direct_target->space == function.address.space && index.contains(instruction.direct_target->value)) leaders.insert(instruction.direct_target->value);
+        for (const auto& target : instruction.indirect_targets)
+            if (target.space == function.address.space && index.contains(target.value)) leaders.insert(target.value);
         quint64 next = 0;
         const bool next_valid = checked_add(instruction.address.value, static_cast<quint64>(instruction.bytes.size()), next);
         if (n + 1 < function.instructions.size() && (!next_valid || function.instructions[n + 1].address.value != next || instruction.flow != FlowKind::Normal)) leaders.insert(function.instructions[n + 1].address.value);
@@ -124,6 +130,8 @@ void build_blocks(Function& function, std::stop_token stop) {
             if (!block.successors.contains(address)) block.successors.push_back(std::move(address));
         };
         if ((last.flow == FlowKind::Jump || last.flow == FlowKind::ConditionalJump) && last.direct_target) successor(*last.direct_target);
+        if (last.flow == FlowKind::Jump || last.flow == FlowKind::ConditionalJump)
+            for (const auto& target : last.indirect_targets) successor(target);
         quint64 next = 0;
         if (last.falls_through && checked_add(last.address.value, static_cast<quint64>(last.bytes.size()), next)) successor(Address{ last.address.space, next });
     }
@@ -204,10 +212,64 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
     };
 
     try {
+        if (options.symbol_map_path.isEmpty() != options.symbol_map_sha256.isEmpty()) throw std::runtime_error("Mapa de símbolos exige caminho e SHA-256 juntos.");
         if (interrupted()) { record_interruption(); return result; }
         report(QStringLiteral("metadados"), 0, 1);
         auto file = std::make_shared<BinaryFile>(path);
         result.metadata = load_binary(file, options, token);
+        report(QStringLiteral("SHA-256 da imagem"), 0, result.metadata.size);
+        QCryptographicHash source_hash(QCryptographicHash::Sha256);
+        for (quint64 offset = 0; offset < file->size();) {
+            check_cancelled(token); const auto count = std::min<quint64>(1024 * 1024, file->size() - offset);
+            source_hash.addData(file->read(offset, count)); offset += count;
+            report(QStringLiteral("SHA-256 da imagem"), offset, file->size());
+        }
+        result.metadata.sha256 = QString::fromLatin1(source_hash.result().toHex());
+        report(QStringLiteral("símbolos, relocações e metadados de funções"), 0, 1);
+        const auto enriched = enrich_binary(file, result.metadata, token);
+        result.metadata.symbols += enriched.symbols;
+        QSet<QString> entry_keys;
+        for (const auto& entry : result.metadata.entries) entry_keys.insert(entry.text());
+        const auto add_seed = [&](const Address& entry) {
+            if (entry_keys.contains(entry.text())) return;
+            if (result.metadata.entries.size() >= 10000) {
+                result.state = QStringLiteral("partial");
+                warn(result.warnings, QStringLiteral("Entradas adicionais limitadas a 10000 sementes; símbolos completos permanecem disponíveis.")); return;
+            }
+            entry_keys.insert(entry.text()); result.metadata.entries.push_back(entry);
+        };
+        for (const auto& entry : enriched.entries) { check_cancelled(token); add_seed(entry); }
+        result.metadata.imports += enriched.imports;
+        result.references += enriched.references;
+        result.metadata.warnings += enriched.warnings;
+        result.enrichment = enriched.details;
+        if (!options.symbol_map_path.isEmpty()) {
+            const auto map_file = std::make_shared<BinaryFile>(options.symbol_map_path);
+            if (map_file->size() > 16 * 1024 * 1024) throw std::runtime_error("Mapa de símbolos excede 16 MiB.");
+            QCryptographicHash map_hash(QCryptographicHash::Sha256);
+            for (quint64 offset = 0; offset < map_file->size();) {
+                check_cancelled(token);
+                const auto count = std::min<quint64>(1024 * 1024, map_file->size() - offset);
+                map_hash.addData(map_file->read(offset, count)); offset += count;
+            }
+            const auto sha = QString::fromLatin1(map_hash.result().toHex());
+            if (options.symbol_map_sha256.isEmpty() || sha != options.symbol_map_sha256) throw std::runtime_error("SHA-256 do mapa de símbolos ausente ou divergente.");
+            const auto imported = import_symbol_map(options.symbol_map_path, result.metadata, SymbolMapFormat::Auto, token);
+            result.metadata.symbols += imported.symbols;
+            for (const auto& entry : imported.entries) { check_cancelled(token); add_seed(entry); }
+            result.metadata.warnings += imported.warnings;
+            result.enrichment.insert(QStringLiteral("symbol_map"), imported.details);
+            result.capabilities << QStringLiteral("offline-symbol-map-import");
+            auto map_after = std::make_shared<BinaryFile>(options.symbol_map_path);
+            if (map_after->size() != map_file->size()) throw std::runtime_error("Mapa de símbolos mudou durante a leitura.");
+            QCryptographicHash after_hash(QCryptographicHash::Sha256);
+            for (quint64 offset = 0; offset < map_after->size();) {
+                check_cancelled(token); const auto count = std::min<quint64>(1024 * 1024, map_after->size() - offset);
+                after_hash.addData(map_after->read(offset, count)); offset += count;
+            }
+            if (QString::fromLatin1(after_hash.result().toHex()) != sha) throw std::runtime_error("Mapa de símbolos mudou durante a leitura.");
+        }
+        result.capabilities << QStringLiteral("own-binary-enrichment") << QStringLiteral("own-offline-debug-metadata");
         report(QStringLiteral("metadados"), 1, 1);
         if (interrupted()) { record_interruption(); return result; }
         report(QStringLiteral("entropia e strings"), 0, result.metadata.size);
@@ -234,7 +296,8 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
             return result;
         }
         result.capabilities << QStringLiteral("capstone5-instruction-decoder") << QStringLiteral("own-seeded-function-discovery") << QStringLiteral("own-direct-xrefs") << QStringLiteral("own-partial-cfg") << QStringLiteral("own-partial-low-level-ir");
-        warn(result.warnings, QStringLiteral("Funções são candidatas exploradas por entradas, símbolos de função e chamadas diretas. Fluxos indiretos, exceções, convenções de chamada e limites exatos de função não são recuperados."));
+        warn(result.warnings, QStringLiteral("Funções são candidatas por entradas, símbolos, metadados e chamadas. A resolução indireta cobre constantes locais, ponteiros somente leitura sem relocação e um padrão limitado de tabela de saltos; exceções e limites exatos permanecem parciais."));
+        result.capabilities << QStringLiteral("own-static-indirect-flow") << QStringLiteral("own-bounded-absolute-jump-tables");
         if (result.metadata.architecture == Architecture::Arm || result.metadata.architecture == Architecture::Thumb) warn(result.warnings, QStringLiteral("ARM/Thumb usa um modo fixo da imagem; interworking, IT e mudanças de estado interrompem a exploração afetada."));
         if (result.metadata.architecture == Architecture::Mips) warn(result.warnings, QStringLiteral("MIPS: delay slots e branch-likely não modelados. Funções com transferência de controle não recebem CFG."));
 
@@ -281,6 +344,13 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
         }
 
         std::map<OwnedLocation, InstructionOwner> owners;
+        QSet<QString> relocation_slots;
+        for (const auto& value : result.enrichment.value(QStringLiteral("relocation_slots")).toArray())
+            if (value.isString()) relocation_slots.insert(value.toString());
+        for (const auto& imported : result.metadata.imports) if (imported.slot) relocation_slots.insert(imported.slot->text());
+        const bool allow_memory_pointers = result.enrichment.value(QStringLiteral("relocation_slots_complete")).toBool(false);
+        for (const auto& reference : result.references)
+            if (reference.type.contains(QStringLiteral("relocation"))) relocation_slots.insert(reference.source.text());
         quint64 instruction_count = 0;
         auto reference = [&](Address source, Address target, const QString& type, Address function) {
             result.references.push_back(Reference{ std::move(source), std::move(target), type, std::move(function) });
@@ -323,6 +393,7 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
             while (!paths.empty() && !interrupted()) {
                 Address pc = paths.front();
                 paths.pop_front();
+                detail::StaticFlowResolver resolver(*file, result.metadata, relocation_slots, allow_memory_pointers);
                 while (!interrupted()) {
                     if (incompatible_modes.contains(key(pc))) {
                         function_warning(QStringLiteral("Caminho alcançou símbolo ARM/Thumb de outro modo em %1; exploração interrompida.").arg(pc.text()));
@@ -356,6 +427,14 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
                         break;
                     }
                     auto instruction = std::move(decoded->instruction);
+                    if (resolver.resolve(instruction)) {
+                        if (instruction.direct_target) {
+                            for (qsizetype n = decoded->warnings.size(); n > 0; --n)
+                                if (decoded->warnings[n - 1].startsWith(QStringLiteral("Transferência indireta não resolvida"))) decoded->warnings.removeAt(n - 1);
+                        } else decoded->warnings << QStringLiteral("Destinos obtidos em um caminho são candidatos indiretos; outros predecessores/estados podem produzir destinos diferentes.");
+                        const auto resolved_target = instruction.direct_target ? *instruction.direct_target : instruction.indirect_targets.front();
+                        reference(pc, resolved_target, instruction.direct_target ? QStringLiteral("static-indirect-evidence") : QStringLiteral("indirect-candidate-evidence"), entry);
+                    }
                     if (overlaps_owned(owners, pc, static_cast<quint64>(instruction.bytes.size()), owner)) {
                         function_warning(QStringLiteral("Instrução em %1 se sobrepõe a instrução já recuperada; caminho interrompido.").arg(pc.text()));
                         break;
@@ -372,11 +451,17 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
                         }
                     }
                     if (instruction.memory_target) reference(pc, *instruction.memory_target, instruction.flow == FlowKind::Call ? QStringLiteral("call-slot") : QStringLiteral("data"), entry);
+                    for (const auto& target : instruction.indirect_targets) {
+                        reference(pc, target, instruction.flow == FlowKind::Call ? QStringLiteral("indirect-call-candidate") : QStringLiteral("indirect-jump-candidate"), entry);
+                        if (instruction.flow == FlowKind::Call && !decoded->target_changes_mode) seed(target);
+                    }
+                    resolver.observe(instruction);
                     quint64 next = 0;
                     const bool has_next = checked_add(pc.value, static_cast<quint64>(instruction.bytes.size()), next);
                     if (!has_next) instruction.falls_through = false;
                     const auto flow = instruction.flow;
                     const auto target = instruction.direct_target;
+                    const auto table_targets = instruction.indirect_targets;
                     const bool falls_through = instruction.falls_through;
                     owners.emplace(OwnedLocation{ pc.space, pc.value }, InstructionOwner{ static_cast<quint64>(instruction.bytes.size()), entry });
                     instructions.emplace(pc.value, std::move(instruction));
@@ -384,6 +469,8 @@ AnalysisSnapshot analyze_binary(const QString& path, const OpenOptions& options,
                     if ((instruction_count & 0xff) == 0) report(QStringLiteral("instruções"), instruction_count, limits.max_instructions);
                     if (decoded->stop_path) break;
                     if ((flow == FlowKind::Jump || flow == FlowKind::ConditionalJump) && target) path(*target);
+                    if (flow == FlowKind::Jump || flow == FlowKind::ConditionalJump)
+                        for (const auto& table_target : table_targets) path(table_target);
                     if (!falls_through || !has_next) break;
                     const Address continuation{ pc.space, next };
                     if (continuation != entry && known_seeds.contains(key(continuation))) {

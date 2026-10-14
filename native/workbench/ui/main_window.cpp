@@ -2,6 +2,8 @@
 #include "graph_view.hpp"
 #include "hex_view.hpp"
 #include "import_dialog.hpp"
+#include "reworkbench/decompilation_cache.hpp"
+#include "code_highlighter.hpp"
 
 #include <QCloseEvent>
 #include <QDateTime>
@@ -83,6 +85,14 @@ void MainWindow::build_actions() {
     add(QStringLiteral("save"), QStringLiteral("Salvar projeto"), QKeySequence::Save, [this] { save_project(); });
     add(QStringLiteral("json"), QStringLiteral("Exportar relatório JSON…"), {}, [this] { export_report(); });
     add(QStringLiteral("ir"), QStringLiteral("Exportar IR da função…"), {}, [this] { export_ir(); });
+    add(QStringLiteral("pseudocode"), QStringLiteral("Exportar pseudocódigo…"), {}, [this] { export_pseudocode(); });
+    add(QStringLiteral("diff"), QStringLiteral("Comparar binários…"), {}, [this] { compare_binary(); });
+    add(QStringLiteral("patch"), QStringLiteral("Exportar cópia com patch…"), {}, [this] { export_patch(); });
+    add(QStringLiteral("emulate"), QStringLiteral("Emular função…"), {}, [this] { emulate_selection(); });
+    add(QStringLiteral("symbols"), QStringLiteral("Importar mapa de símbolos…"), {}, [this] { import_symbols(); });
+    add(QStringLiteral("enrichment"), QStringLiteral("Símbolos e metadados adicionais"), {}, [this] { show_enrichment(); });
+    add(QStringLiteral("extensions"), QStringLiteral("Inspecionar extensões…"), {}, [this] { show_extensions(); });
+    add(QStringLiteral("debugger"), QStringLiteral("Abrir depurador…"), {}, [this] { show_debugger(); });
     add(QStringLiteral("rename"), QStringLiteral("Renomear função…"), QKeySequence(QStringLiteral("F2")), [this] { rename_function(); });
     add(QStringLiteral("back"), QStringLiteral("Voltar"), QKeySequence(QStringLiteral("Alt+Left")), [this] { history_step(-1); });
     add(QStringLiteral("forward"), QStringLiteral("Avançar"), QKeySequence(QStringLiteral("Alt+Right")), [this] { history_step(1); });
@@ -151,6 +161,7 @@ void MainWindow::build_workspace() {
     workspace_layout->setContentsMargins(0, 0, 0, 0);
     function_heading_ = new QLabel(QStringLiteral("Selecione uma função"));
     function_heading_->setObjectName(QStringLiteral("codeHeading"));
+    function_heading_->setTextFormat(Qt::PlainText);
     function_heading_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     workspace_layout->addWidget(function_heading_);
     ir_status_ = new QLabel(QStringLiteral("A representação intermediária é parcial e não recupera o código original."));
@@ -161,10 +172,25 @@ void MainWindow::build_workspace() {
     assembly_->activated = [this](const Record& row, int) { if (row.file_offset) show_offset(*row.file_offset); };
     panes->addWidget(panel(QStringLiteral("ASSEMBLY"), assembly_));
     auto* representation = new QTabWidget;
+    pseudocode_ = new QPlainTextEdit;
+    ssa_ = new QPlainTextEdit;
+    for (auto* editor : {pseudocode_, ssa_}) {
+        editor->setReadOnly(true); editor->setFont(QFont(QStringLiteral("Consolas"), 11));
+        editor->setLineWrapMode(QPlainTextEdit::NoWrap); new CodeHighlighter(editor->document());
+    }
+    decompiler_status_ = new QLabel(QStringLiteral("Decompilador próprio · selecione uma função"));
+    decompiler_status_->setWordWrap(true);
+    auto* decompiler_panel = new QWidget;
+    auto* decompiler_layout = new QVBoxLayout(decompiler_panel);
+    decompiler_layout->setContentsMargins(0, 0, 0, 0);
+    decompiler_layout->addWidget(decompiler_status_); decompiler_layout->addWidget(pseudocode_);
+    representation->addTab(decompiler_panel, QStringLiteral("Pseudocódigo"));
+    representation->addTab(ssa_, QStringLiteral("SSA / fluxo de dados"));
     ir_ = new QPlainTextEdit;
     ir_->setReadOnly(true);
     ir_->setFont(QFont(QStringLiteral("Consolas"), 11));
     ir_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    new CodeHighlighter(ir_->document());
     representation->addTab(ir_, QStringLiteral("IR · semântica parcial"));
     graph_ = new GraphView;
     representation->addTab(graph_, QStringLiteral("Fluxo de controle"));
@@ -213,6 +239,7 @@ void MainWindow::build_workspace() {
     auto* note_panel = new QWidget;
     auto* note_layout = new QVBoxLayout(note_panel);
     note_heading_ = new QLabel(QStringLiteral("Selecione um endereço para anotar"));
+    note_heading_->setTextFormat(Qt::PlainText);
     note_heading_->setWordWrap(true);
     note_layout->addWidget(note_heading_);
     note_editor_ = new QPlainTextEdit;
@@ -245,6 +272,7 @@ void MainWindow::build_workspace() {
     tabifyDockWidget(docks_[QStringLiteral("investigation")], docks_[QStringLiteral("metadata")]);
     docks_[QStringLiteral("investigation")]->raise();
     status_ = new QLabel(QStringLiteral("Crie ou abra um projeto nativo para começar."));
+    status_->setTextFormat(Qt::PlainText);
     statusBar()->addWidget(status_, 1);
     progress_ = new QProgressBar;
     progress_->setMaximumWidth(170);
@@ -261,6 +289,10 @@ void MainWindow::build_menus() {
     for (const auto& key : {QStringLiteral("back"), QStringLiteral("forward"), QStringLiteral("jump"), QStringLiteral("rename")}) navigate_menu->addAction(actions_[key]);
     auto* analysis = menuBar()->addMenu(QStringLiteral("Análise"));
     analysis->addAction(actions_[QStringLiteral("cancel")]);
+    for (const auto& key : {QStringLiteral("symbols"), QStringLiteral("enrichment"), QStringLiteral("emulate")}) analysis->addAction(actions_[key]);
+    auto* tools = menuBar()->addMenu(QStringLiteral("Ferramentas"));
+    for (const auto& key : {QStringLiteral("diff"), QStringLiteral("patch"), QStringLiteral("debugger"), QStringLiteral("extensions")}) tools->addAction(actions_[key]);
+    file->addAction(actions_[QStringLiteral("pseudocode")]);
     auto* view = menuBar()->addMenu(QStringLiteral("Visualizar"));
     for (auto* dock : docks_) view->addAction(dock->toggleViewAction());
     menuBar()->addMenu(QStringLiteral("Ajuda"))->addAction(actions_[QStringLiteral("about")]);
@@ -323,6 +355,9 @@ void MainWindow::update_actions() {
     actions_[QStringLiteral("save")]->setEnabled(project_ && !busy_ && !closing_);
     actions_[QStringLiteral("json")]->setEnabled(snapshot_ && !busy_ && !closing_);
     actions_[QStringLiteral("ir")]->setEnabled(snapshot_ && selected_function_ && !busy_ && !closing_);
+    for (const auto& key : {QStringLiteral("pseudocode"), QStringLiteral("emulate")}) actions_[key]->setEnabled(snapshot_ && selected_function_ && !busy_ && !closing_);
+    for (const auto& key : {QStringLiteral("symbols"), QStringLiteral("enrichment"), QStringLiteral("patch")}) actions_[key]->setEnabled(snapshot_ && !busy_ && !closing_);
+    for (const auto& key : {QStringLiteral("diff"), QStringLiteral("extensions"), QStringLiteral("debugger")}) actions_[key]->setEnabled(!busy_ && !closing_);
     actions_[QStringLiteral("rename")]->setEnabled(snapshot_ && selected_function_ && !busy_ && !closing_);
     actions_[QStringLiteral("jump")]->setEnabled(snapshot_ && !busy_ && !closing_);
     actions_[QStringLiteral("back")]->setEnabled(history_index_ > 0 && !busy_ && !closing_);
@@ -381,6 +416,7 @@ void MainWindow::install_project(const TaskResult& result) {
     ++selection_token_; selection_stop_.request_stop();
     ++audit_token_; audit_stop_.request_stop();
     byte_path_.clear(); hex_->clear(); ir_->clear(); graph_->show_function(nullptr);
+    pseudocode_->clear(); ssa_->clear();
     metadata_->clear(); function_heading_->setText(QStringLiteral("Selecione uma função"));
     for (auto* explorer : explorers_) explorer->set_snapshot({});
     assembly_->set_snapshot({}); references_->set_snapshot({});
@@ -415,7 +451,14 @@ void MainWindow::analyze_sample(const QString& path, const OpenOptions& options)
         progress({QStringLiteral("Copiando e identificando a amostra…"), 0, 0});
         const auto sample = project->import_sample(path, stop);
         const auto stored_path = project->root() + QLatin1Char('/') + sample.relative_path;
+        if (const auto reusable = project->reusable_analysis(sample, options, stop)) {
+            TaskResult result; result.project = project; result.analysis_id = *reusable;
+            result.snapshot = std::make_shared<AnalysisSnapshot>(project->load_analysis(*reusable, stop));
+            result.summaries = project->analyses(); result.notes = project->notes(*reusable);
+            result.message = QStringLiteral("Análise compatível reaproveitada pelo hash e pelas opções."); return result;
+        }
         auto snapshot = std::make_shared<AnalysisSnapshot>(analyze_binary(stored_path, options, {}, stop, progress));
+        if (!snapshot->metadata.sha256.isEmpty() && snapshot->metadata.sha256 != sample.sha256) throw std::runtime_error("A cópia mudou antes da análise; resultado recusado.");
         snapshot->metadata.sha256 = sample.sha256;
         snapshot->metadata.original_name = sample.original_name;
         // A cancelled analysis may still contain useful decoded evidence. Its
@@ -459,6 +502,7 @@ void MainWindow::install_snapshot(const TaskResult& result) {
     for (auto* explorer : explorers_) explorer->set_snapshot(snapshot_);
     assembly_->set_snapshot({}); references_->set_snapshot(snapshot_);
     graph_->show_function(nullptr); ir_->clear();
+    pseudocode_->clear(); ssa_->clear();
     function_heading_->setText(QStringLiteral("Selecione uma função"));
     ir_status_->setText(QStringLiteral("IR própria e parcial · sem recuperação de tipos/variáveis de alto nível."));
     byte_path_ = snapshot_->metadata.source_path;
@@ -507,6 +551,7 @@ void MainWindow::navigate(Address address, bool record_history) {
     if (index < 0) {
         function_heading_->setText(QStringLiteral("Endereço · ") + address.text());
         ir_->clear(); ir_status_->setText(QStringLiteral("Nenhuma função descoberta nesse endereço. Consulte as referências e os bytes."));
+        pseudocode_->clear(); ssa_->clear(); decompiler_status_->setText(QStringLiteral("Nenhuma função descoberta para decompilar."));
         assembly_->set_snapshot({}); references_->set_snapshot(snapshot_); graph_->show_function(nullptr);
         if (const auto offset = reworkbench::file_offset(snapshot_->metadata, address)) show_offset(*offset);
         update_actions(); return;
@@ -517,6 +562,22 @@ void MainWindow::navigate(Address address, bool record_history) {
     assembly_->set_snapshot(snapshot_, index); references_->set_snapshot(snapshot_, index);
     graph_->show_function(&function);
     ir_->setPlainText(QStringLiteral("Construindo representação intermediária…"));
+    pseudocode_->setPlainText(QStringLiteral("Analisando fluxo de dados e construindo pseudocódigo…")); ssa_->clear();
+    decompiler_status_->setText(QStringLiteral("Decompilando…"));
+    auto* decompilation = new QFutureWatcher<DecompilationResult>(this);
+    connect(decompilation, &QFutureWatcher<DecompilationResult>::finished, this, [this, decompilation, token] {
+        const auto result = decompilation->result(); decompilation->deleteLater();
+        if (token != selection_token_ || closing_) return;
+        pseudocode_->setPlainText(result.pseudocode); ssa_->setPlainText(result.ssa_text);
+        decompiler_status_->setText(QStringLiteral("%1/%2 instruções modeladas · fluxo de dados %3%4").arg(result.modeled_instructions).arg(result.total_instructions)
+            .arg(result.dataflow_converged ? QStringLiteral("convergente") : QStringLiteral("parcial"), result.output_truncated ? QStringLiteral(" · saída limitada") : QString{}));
+        decompiler_status_->setToolTip(result.warnings.join(QLatin1Char('\n')));
+    });
+    decompilation->setFuture(QtConcurrent::run([snapshot = std::shared_ptr<const AnalysisSnapshot>(snapshot_), project = project_, index, stop = selection_stop_.get_token()] {
+        try { return cached_decompile(project, *snapshot, index, stop); }
+        catch (const std::exception& exception) { DecompilationResult result; result.pseudocode = exception_text(exception); return result; }
+        catch (...) { DecompilationResult result; result.pseudocode = QStringLiteral("Decompilação indisponível."); return result; }
+    }));
     auto* watcher = new QFutureWatcher<RenderedFunction>(this);
     connect(watcher, &QFutureWatcher<RenderedFunction>::finished, this, [this, watcher, token] {
         const auto result = watcher->result(); watcher->deleteLater();
