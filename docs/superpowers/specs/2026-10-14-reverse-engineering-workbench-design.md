@@ -2,7 +2,7 @@
 
 Data: 2026-10-14
 
-Estado: arquitetura e primeiro marco aprovados em conversa; documento aguardando revisão do usuário.
+Estado: arquitetura, primeiro marco e especificação escrita aprovados pelo usuário em 2026-10-14.
 
 ## 1. Objetivo e entendimento aprovado
 
