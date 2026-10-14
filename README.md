@@ -13,7 +13,7 @@ O código da primeira versão está implementado na branch `feat/reworkbench`, e
 - Assembly, pseudocódigo, referências, histórico de navegação e bytes do arquivo com mapeamento de offsets.
 - Renomeação persistente de funções, cache por revisão e exportação de relatório JSON e pseudocódigo da função selecionada.
 - Pistas de auditoria baseadas em imports `gets`, `strcpy`, `strcat` e `sprintf`, com referências concretas quando disponíveis.
-- Triagem de bytes com entropia global e strings ASCII, usando Python ou um auxiliar opcional em Rust.
+- Triagem de bytes com núcleo próprio em C++20 para entropia global e strings ASCII; Rust e Python permanecem como alternativas.
 - Operações do motor em fila, limites de tempo, cancelamento, heartbeat e encerramento da árvore de processos no Windows.
 
 ## Iniciar quando desejar executar
@@ -59,14 +59,17 @@ O diagnóstico é uma ação separada e somente será executado se você o solic
 |---|---|
 | Python / PySide6 | Interface desktop, coordenação, protocolo, exportação e alternativa para triagem de bytes |
 | Java / PyGhidra | Importadores, modelo do programa e autoanálise do Ghidra |
-| C / C++ | Componentes nativos de decompilação fornecidos pelo Ghidra e fontes das amostras de desenvolvimento |
+| C++20 | Núcleo próprio `native/bytecore_cpp`: biblioteca de análise de bytes e CLI JSON, integrada como auxiliar nativo prioritário da triagem |
+| C / C++ do Ghidra | Componentes de decompilação fornecidos pelo motor externo; as fixtures próprias também incluem C |
 | SLEIGH | Especificações de processadores e semântica das instruções fornecidas pelo Ghidra |
 | Rust | Código do auxiliar opcional `native/bytecore`; nenhum executável gerado nesta etapa |
 | Assembly | Fontes próprias das amostras ARM, Thumb e MIPS em `tests/fixtures` |
 | SQL / SQLite | Índice dos registros, anotações, revisões e cache local |
 | Gradle | Build do projeto Ghidra original; esta bancada utiliza uma distribuição pronta |
 
-O produto não precisa reconstruir o Ghidra com Gradle. Os componentes Java, C/C++ e as especificações SLEIGH pertencem à distribuição do motor e não estão reimplementados ou incluídos neste repositório.
+O produto não precisa reconstruir o Ghidra com Gradle. Os componentes Java, C/C++ e as especificações SLEIGH do Ghidra pertencem à distribuição do motor. O núcleo C++20 em `native/bytecore_cpp` é código próprio da bancada e tem uma responsabilidade separada: triagem de bytes.
+
+O módulo C++ está escrito e integrado à seleção do processador nativo, mas continua **sem compilar**. Quando seu executável estiver disponível, será preferido ao auxiliar Rust. Na ausência de auxiliares nativos, a triagem usa Python; uma falha do auxiliar escolhido também recorre a Python. Consulte os caminhos e o contrato no [README do núcleo C++](native/bytecore_cpp/README.md).
 
 As tabelas carregam páginas de 200 registros e mantêm até 1.000 linhas por intervalo na memória. Use Anterior / Próximos para percorrer todos os resultados. Strings definidas têm prévia de até 4.096 caracteres; o relatório indica quando houve truncamento, e os bytes da amostra continuam disponíveis no visor.
 
@@ -77,7 +80,8 @@ src/reworkbench/
   engine/       supervisor, worker e integração Ghidra
   project/      amostras, bloqueio do projeto e SQLite
   ui/           janela Qt, exploradores, código, hex e notas
-native/bytecore/ auxiliar Rust opcional, ainda sem compilar
+native/bytecore_cpp/ núcleo próprio C++20, CMake, biblioteca e CLI, ainda sem compilar
+native/bytecore/     auxiliar Rust opcional, ainda sem compilar
 scripts/        instalação, inicialização e diagnóstico
 docs/           arquitetura, plano e estado de validação
 ```
@@ -90,4 +94,4 @@ Esta versão concentra-se em análise estática. Não implementa depurador, exec
 
 A persistência semântica é feita no projeto Ghidra, enquanto SQLite mantém o índice e as anotações. Em caso de interrupção do motor, a reabertura reconcilia o índice com o programa salvo. Arquivos em regiões sem correspondência na amostra, como memória não inicializada, não recebem um offset artificial.
 
-Veja [a arquitetura aprovada](docs/superpowers/specs/2026-10-14-reverse-engineering-workbench-design.md) e a documentação do [auxiliar Rust](native/bytecore/README.md). Ghidra é um projeto externo distribuído sob sua própria licença: [repositório oficial](https://github.com/NationalSecurityAgency/ghidra).
+Veja [a arquitetura aprovada](docs/superpowers/specs/2026-10-14-reverse-engineering-workbench-design.md), o [núcleo C++20](native/bytecore_cpp/README.md) e o [auxiliar Rust](native/bytecore/README.md). Ghidra é um projeto externo distribuído sob sua própria licença: [repositório oficial](https://github.com/NationalSecurityAgency/ghidra).

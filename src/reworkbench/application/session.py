@@ -407,11 +407,17 @@ class Session:
             previous.cancel()
         cancel = Cancellation()
         self._scans.append(cancel)
-        executable = Path(__file__).resolve().parents[3] / 'native' / 'bytecore' / 'target' / 'release' / 'bytecore.exe'
+        native_root = Path(__file__).resolve().parents[3] / 'native'
+        candidates = (
+            native_root / 'bytecore_cpp' / 'build' / 'Release' / 'bytecore_cpp.exe',
+            native_root / 'bytecore_cpp' / 'build' / 'bytecore_cpp.exe',
+            native_root / 'bytecore' / 'target' / 'release' / 'bytecore.exe',
+        )
 
         def scan():
             try:
-                return scan_bytes(source, cancel=cancel, native_executable=executable if executable.is_file() else None)
+                executable = next((candidate for candidate in candidates if candidate.is_file()), None)
+                return scan_bytes(source, cancel=cancel, native_executable=executable)
             finally:
                 if cancel in self._scans:
                     self._scans.remove(cancel)

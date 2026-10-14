@@ -630,7 +630,7 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def about(self):
-        QMessageBox.about(self, 'REWorkbench', 'Bancada local de engenharia reversa\n\nInterface Qt, motor Ghidra em processo separado, projetos SQLite e triagem opcional em Rust.\n\nO pseudocódigo é uma aproximação do comportamento do binário. Esta versão realiza análise estática.')
+        QMessageBox.about(self, 'REWorkbench', 'Bancada local de engenharia reversa\n\nInterface Qt, motor Ghidra em processo separado, projetos SQLite e núcleo próprio de triagem em C++20, com alternativas Rust e Python.\n\nO pseudocódigo é uma aproximação do comportamento do binário. Esta versão realiza análise estática.')
 
     def closeEvent(self, event):
         if self._allow_close:

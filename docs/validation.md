@@ -15,6 +15,7 @@ As evidências prévias não validam a versão atual inteira. A interface e as a
 - Interface Qt, exploradores paginados, configuração de importação, navegação, assembly e pseudocódigo.
 - Visualização de bytes por intervalos e triagem de strings e entropia.
 - Auxiliar opcional em Rust, com alternativa em Python.
+- Núcleo próprio C++20 de triagem, com biblioteca estática, CLI JSON e prioridade na seleção do processador nativo. Código acrescentado após o usuário exigir C++ próprio; ainda sem compilar ou executar.
 - Notas, marcadores, pistas de auditoria e exportação JSON / pseudocódigo.
 - Ajustes de cancelamento, encerramento, proteção de destinos de exportação e revisão de cache.
 - Scripts de instalação, inicialização e diagnóstico.
@@ -22,6 +23,8 @@ As evidências prévias não validam a versão atual inteira. A interface e as a
 Somente uma revisão estática pode ser realizada nesta etapa. A compilação do auxiliar Rust, os testes automatizados e a verificação manual dos fluxos da interface ficam pendentes até nova orientação do usuário.
 
 A revisão independente identificou nove pontos de integração e de limites de memória. O código foi alterado para tratá-los em uma única rodada, sem reexecução nem nova revisão independente. As decisões e as alterações estão registradas em [implementation-notes.md](implementation-notes.md).
+
+A inclusão posterior do módulo C++20 recebeu uma revisão estática independente com escopo no novo código nativo, CMake, adaptador e documentação. Essa revisão não identificou problemas críticos ou importantes. A aceitação de build, os caminhos Unicode no Windows e a equivalência com Rust/Python continuam sem validação de execução.
 
 ## Verificações pendentes para uma etapa posterior
 
@@ -31,6 +34,6 @@ A revisão independente identificou nove pontos de integração e de limites de 
 4. Renomeação, notas e marcadores após fechar e reabrir, com reconstrução do índice a partir do programa salvo.
 5. Cancelamento e fechamento durante início da JVM, autoanálise, indexação, decompilação e triagem; verificar os processos filhos.
 6. Exportação íntegra e substituição atômica diante de falhas, endereços de 64 bits, estados parciais e preservação das amostras.
-7. Compilação separada do auxiliar Rust e comparação com a alternativa Python para strings que cruzam intervalos de leitura.
+7. Compilação separada do núcleo C++20 e do auxiliar Rust; comparação de ambos com Python, incluindo strings que cruzam blocos, EOF, prévias truncadas, limite zero, JSON e caminhos Unicode no Windows. Confirmar também a prioridade C++ → Rust quando ausente → Python.
 
 Essa lista registra trabalho de validação futuro e não representa verificações já realizadas.

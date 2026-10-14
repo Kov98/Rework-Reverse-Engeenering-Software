@@ -16,7 +16,7 @@ O desenvolvimento está na branch `feat/reworkbench`, no diretório `.worktrees/
 | Retornar total desconhecido `-1` durante streaming do worker | Evita recontar toda a análise para cada página. O índice SQLite fornece os totais usados na interface. |
 | Suspender testes, compilações e execução | Instrução explícita do usuário em 14/10/2026. O código atual não recebe declaração de aprovação dinâmica. |
 | Auxiliar Rust opcional, com alternativa Python | Permite acrescentar processamento nativo sem exigir compilação para usar o restante da bancada. O desempenho do auxiliar permanece não medido. |
-| Utilizar Java, C/C++, SLEIGH e Gradle através do Ghidra | Esses componentes pertencem ao motor externo. Não foram criados módulos vazios para repetir cada linguagem na bancada. SQL usa SQLite e as fixtures incluem C e assembly. |
+| Utilizar Java, SLEIGH e Gradle através do Ghidra | Esses componentes pertencem ao motor externo, assim como o decompilador C/C++ do Ghidra. Após exigência explícita do usuário, a bancada ganhou também o núcleo próprio C++20 descrito abaixo. SQL usa SQLite e as fixtures incluem C e assembly. |
 | Exibir a origem no diálogo e devolver o destino das exportações | O diálogo recebe o caminho da amostra; as exportações devolvem um `Path` para a confirmação da interface. Consumidores e plano foram ajustados. |
 | Limitar prévias de strings e stubs | Strings definidas têm 4.096 caracteres por prévia e imports até 128 endereços auxiliares, com flags de truncamento. Xrefs permanecem indexados; o visor permite acessar os bytes. |
 | Limitar cada tabela a 1.000 linhas por intervalo | Páginas de 200 registros evitam carregar a lista inteira. Anterior / Próximos preservam acesso aos resultados restantes. |
@@ -47,3 +47,15 @@ Essas alterações receberam leitura estática pelo autor e não foram executada
 - A compatibilidade efetiva de cada chamada Java/PyGhidra e de toda a matriz atual depende de verificação posterior. A evidência anterior de 11 casos aprovados não valida as alterações recentes.
 - A detecção de toda configuração ARM/Thumb semanticamente incorreta está fora da garantia prevista. O programa valida opções estruturais e as entradas, mas o analista continua responsável pela escolha da arquitetura e contexto.
 - Desempenho real por tamanho de binário não foi medido. Os limites de páginas, prévias, mensagens e intervalos de leitura foram escritos para controlar o consumo, mas precisam de avaliação dinâmica posterior.
+
+## Inclusão de C++ próprio
+
+Em 14/10/2026, após esclarecer que o C++ anterior pertencia ao Ghidra, o usuário determinou: **“tem que ter c++.”** Essa instrução foi aplicada ao fluxo de triagem existente, preservando a orientação de não testar, compilar ou executar.
+
+Foi criado `native/bytecore_cpp`, com C++20, CMake, biblioteca estática reutilizável e CLI JSON. O módulo calcula entropia e extrai strings ASCII e offsets de 64 bits sem carregar a amostra inteira. O contrato de saída permanece compatível com `scan_bytes`; não houve mudança no protocolo de análise semântica do Ghidra.
+
+O aplicativo passa a procurar primeiro o executável C++ nos caminhos documentados do build. Quando ele está ausente, pode usar o auxiliar Rust; se não houver auxiliar ou o escolhido falhar, utiliza Python. Não há compilação automática. A biblioteca C++ oferece cancelamento cooperativo por `std::stop_token`, e a integração de processo mantém o cancelamento e o limite de tempo existentes no adaptador Python.
+
+A mudança torna C++ parte do código próprio e do processamento nativo da bancada. A interface permanece em Python/Qt; essa instrução não foi tratada como autorização para substituir toda a interface ou reimplementar o decompilador do Ghidra. O limite prático e a correção dinâmica do novo núcleo permanecem pendentes de validação.
+
+Uma revisão independente e apenas estática do novo módulo, CMake, seleção do executável, protocolo e documentação não identificou problemas críticos ou importantes. Não foram executados compilador, CMake, testes, código do produto ou instalações. O executável continua ausente nesta entrega de código-fonte.

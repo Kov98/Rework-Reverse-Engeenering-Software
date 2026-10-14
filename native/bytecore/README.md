@@ -2,9 +2,12 @@
 
 Optional Rust accelerator for the workbench's byte triage. The Python application
 also has a standard-library implementation and does not require this executable.
-Nothing downloads, installs, compiles or discovers this helper automatically.
-Pass an explicitly configured existing binary as `native_executable` to
-`reworkbench.application.byte_scan.scan_bytes` to opt in.
+The session prefers the project's own C++20 scanner in `native/bytecore_cpp`.
+When C++ is absent, it discovers this Rust helper at
+`native/bytecore/target/release/bytecore.exe`. A selected native helper that fails
+falls back directly to Python. No helper is downloaded, installed or compiled
+automatically. API callers can also pass an existing binary as
+`native_executable` to `reworkbench.application.byte_scan.scan_bytes`.
 
 CLI contract:
 
