@@ -43,7 +43,7 @@ def atomic_text(destination):
             temporary.unlink(missing_ok=True)
 
 
-def export_report(repository, analysis_id, destination, hints=()):
+def export_report(repository, analysis_id, destination, hints=(), cancel=None):
     destination = export_destination(repository, destination)
     analysis = repository.get_analysis(analysis_id)
     sample = repository.get_sample(analysis.sample_sha256)
@@ -57,7 +57,7 @@ def export_report(repository, analysis_id, destination, hints=()):
                 stream.write(',\n')
             stream.write(f'    {json.dumps(kind)}: [')
             first = True
-            for row in records(repository, analysis_id, kind):
+            for row in records(repository, analysis_id, kind, cancel):
                 stream.write('\n      ' if first else ',\n      ')
                 stream.write(json.dumps(row, ensure_ascii=False))
                 first = False

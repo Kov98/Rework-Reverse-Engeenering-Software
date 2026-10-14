@@ -1,5 +1,6 @@
 """Versioned import review hints. A match is a lead, never a finding of exploitability."""
 from __future__ import annotations
+from concurrent.futures import CancelledError
 
 RULESET_VERSION = 1
 RULES = {
@@ -10,11 +11,16 @@ RULES = {
 }
 
 
-def records(repository, analysis_id, kind):
+def records(repository, analysis_id, kind, cancel=None):
     offset = 0
     while True:
+        if cancel is not None and cancel.cancelled():
+            raise CancelledError('Leitura de registros interrompida.')
         page = repository.page(analysis_id, kind, offset=offset)
-        yield from page.items
+        for item in page.items:
+            if cancel is not None and cancel.cancelled():
+                raise CancelledError('Leitura de registros interrompida.')
+            yield item
         offset += len(page.items)
         if offset >= page.total or not page.items:
             break
@@ -50,5 +56,5 @@ def audit_imports(imports, xrefs):
     return tuple(hints)
 
 
-def review_imports(repository, analysis_id):
-    return audit_imports(records(repository, analysis_id, 'imports'), records(repository, analysis_id, 'xrefs'))
+def review_imports(repository, analysis_id, cancel=None):
+    return audit_imports(records(repository, analysis_id, 'imports', cancel), records(repository, analysis_id, 'xrefs', cancel))

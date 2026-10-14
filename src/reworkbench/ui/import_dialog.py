@@ -19,10 +19,12 @@ class ImportDialog(QDialog):
         form = QFormLayout()
         self.choice = QComboBox()
         choices = inspection.get('choices', [])
+        if inspection.get('container'):
+            self.choice.addItem('Selecione uma imagem do contêiner…', None)
         for choice in choices:
             self.choice.addItem(choice['label'], choice)
         preferred = next((i for i, item in enumerate(choices) if item.get('preferred')), 0)
-        if choices:
+        if choices and not inspection.get('container'):
             self.choice.setCurrentIndex(preferred)
         form.addRow('Formato / imagem', self.choice)
         self.raw = QCheckBox('Importar como firmware bruto (BinaryLoader)')

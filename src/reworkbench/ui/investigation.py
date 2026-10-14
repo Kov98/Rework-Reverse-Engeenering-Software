@@ -60,8 +60,22 @@ class InvestigationPanel(QTabWidget):
             return
         analysis_id, address = self.analysis_id, self.address
         self._dirty = False
-        future = self.session.set_note(analysis_id, address, self.note.toPlainText(), self.bookmark.isChecked())
-        self.watch(future, lambda _: self.refresh_notes() if analysis_id == self.analysis_id else None)
+        try:
+            future = self.session.set_note(analysis_id, address, self.note.toPlainText(), self.bookmark.isChecked())
+        except Exception as exc:
+            self._save_failed(analysis_id, address, exc)
+            return
+        self.watch(future, lambda _: self.refresh_notes() if analysis_id == self.analysis_id else None, scoped=False, on_error=lambda error: self._save_failed(analysis_id, address, error))
+
+    def _save_failed(self, analysis_id, address, error):
+        if analysis_id == self.analysis_id and address == self.address:
+            self._dirty = True
+            self.location.setText(f'Nota não salva em {address}: {error}')
+
+    def mark_unsaved(self):
+        if self.address is not None:
+            self._dirty = True
+            self.location.setText(f'Nota não salva em {self.address}. Tente salvar novamente.')
 
     def set_selection(self, analysis_id, address):
         self.flush()

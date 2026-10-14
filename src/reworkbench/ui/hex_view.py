@@ -52,6 +52,18 @@ class HexView(QWidget):
         except ValueError:
             self.detail.setText("Use um offset válido, como 0x1000.")
 
+    def clear(self):
+        self._token += 1
+        self.path = None
+        self.offset = 0
+        self.text.clear()
+        self.offset_input.setText('0x0')
+        self.detail.setText('Nenhuma amostra selecionada')
+
+    def shutdown(self):
+        self._token += 1
+        self._executor.shutdown(wait=False, cancel_futures=True)
+
     def show_file(self, path: Path, offset=0):
         if path is None:
             return

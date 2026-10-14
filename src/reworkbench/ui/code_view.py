@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QSyntaxHighlighter, QTextCharFormat
 from PySide6.QtWidgets import QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget
 
 from reworkbench.domain import Address, Page
-from reworkbench.ui.models import PagedTableModel
+from reworkbench.ui.models import PagedTableModel, PagingControls
 
 
 class NavigationHistory:
@@ -140,6 +140,8 @@ class CodeView(QWidget):
         label.setObjectName('panelTitle')
         layout.addWidget(label)
         layout.addWidget(child)
+        if isinstance(child, QTableView) and isinstance(child.model(), PagedTableModel):
+            layout.addWidget(PagingControls(child.model(), panel))
         return panel
 
     def _fetch(self, kind, offset, query):
@@ -181,6 +183,13 @@ class CodeView(QWidget):
     def refresh(self):
         if self.address is not None:
             self.show_function(self.analysis_id, self.address)
+
+    def refresh_records(self, kind):
+        if self.address is None:
+            return
+        model = {'assembly': self.assembly_model, 'xrefs': self.xrefs_model}.get(kind)
+        if model:
+            model.set_query(model.query)
 
     def _assembly_activated(self, index):
         row = index.data(Qt.UserRole)

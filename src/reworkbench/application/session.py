@@ -16,12 +16,18 @@ class Session:
         self._factory = supervisor_factory
         self._operations = ThreadPoolExecutor(max_workers=1, thread_name_prefix="semantic")
         self._io = ThreadPoolExecutor(max_workers=2, thread_name_prefix="project-io")
+        self._writes = ThreadPoolExecutor(max_workers=1, thread_name_prefix='project-writes')
+        self._write_lock = threading.RLock()
+        self._write_failures = {}
+        self._transitioning = False
         self._rpc_lock = threading.RLock()
         self._project_lock = threading.RLock()
         self._pending = {}
         self._repo = None
         self._worker = None
+        self._worker_epoch = 0
         self._opened_analysis = None
+        self._needs_reconcile = set()
         self._generation = 0
         self._selection = None
         self._imports = []
@@ -30,7 +36,9 @@ class Session:
         self._active_request = None
         self._close_future = None
         self._closing = False
+        self._closed = False
         self._scans = []
+        self._background_cancels = []
 
     @property
     def project_root(self):
@@ -39,6 +47,10 @@ class Session:
     @property
     def generation(self):
         return self._generation
+
+    @property
+    def closed(self):
+        return self._closed
 
     def _event(self, kind, analysis_id=None, request_id=None, revision=0, payload=None, generation=None):
         self.emit({"kind": kind, "analysis_id": analysis_id, "request_id": request_id, "revision": revision, "generation": self._generation if generation is None else generation, "payload": payload or {}})
@@ -68,11 +80,16 @@ class Session:
         if self._closing:
             raise CancelledError('A aplicação está sendo encerrada.')
         if self._worker is not None and getattr(self._worker, "_failed", False):
-            self._worker.close()
-            self._worker = None
+            self._drop_worker()
         if self._worker is None:
             directory = self._repo.root / "logs" if self._repo else None
-            self._worker = self._factory(self.config, self._on_engine_event, log_dir=directory)
+            self._worker_epoch += 1
+            epoch = self._worker_epoch
+
+            def receive(message):
+                if epoch == self._worker_epoch:
+                    self._on_engine_event(message)
+            self._worker = self._factory(self.config, receive, log_dir=directory)
             try:
                 self._event("status", payload={"message": "Iniciando motor de análise…"})
                 self._worker.start()
@@ -99,33 +116,49 @@ class Session:
             self._active_request = None
             self._rpc_cancel = None
 
-    def _change_project(self, root, create):
-        self._drop_worker()
-        with self._project_lock:
-            if self._repo:
-                self._repo.close()
-                self._repo = None
-            self._repo = ProjectRepository.create(root) if create else ProjectRepository.open(root)
-        self._event("project_opened", payload={"root": str(self._repo.root)})
+    def _change_project(self, root, create, generation):
+        if generation != self._generation or self._closing:
+            return
+        try:
+            self._drain_writes()
+            self._drop_worker()
+            with self._project_lock:
+                if self._repo:
+                    self._repo.close()
+                    self._repo = None
+                self._repo = ProjectRepository.create(root) if create else ProjectRepository.open(root)
+                self._needs_reconcile.clear()
+        finally:
+            with self._write_lock:
+                if generation == self._generation:
+                    self._transitioning = False
+        if generation != self._generation:
+            return
+        self._event("project_opened", payload={"root": str(self._repo.root)}, generation=generation)
         analyses = self._repo.analyses()
         if analyses:
             latest = analyses[-1]
-            self._event("analysis_created", latest.id, payload=self._details(latest.id))
+            self._event("analysis_created", latest.id, payload=self._details(latest.id), generation=generation)
             if self._repo.get_metadata(latest.id).get("program_path"):
                 try:
-                    self._ensure_analysis_open(latest.id, reconcile=True)
+                    self._ensure_analysis_open(latest.id, reconcile=True, generation=generation)
                 except Exception as exc:
-                    self._event("error", latest.id, payload={"message": str(exc)})
+                    self._event("error", latest.id, payload={"message": str(exc)}, generation=generation)
 
     def _request_project(self, root, create):
         if self._closing:
             raise RuntimeError('A aplicação está sendo encerrada.')
-        self._generation += 1
+        with self._write_lock:
+            self._transitioning = True
+            self._generation += 1
         self._selection = None
         self.cancel_active()
-        for cancel in self._imports:
-            cancel.cancel()
-        return self._operations.submit(self._change_project, root, create)
+        for cancel in tuple(self._imports):
+            try:
+                cancel.cancel()
+            except (OSError, RuntimeError):
+                pass
+        return self._operations.submit(self._change_project, root, create, self._generation)
 
     def create_project(self, root: Path) -> Future:
         return self._request_project(root, True)
@@ -182,7 +215,7 @@ class Session:
         analysis_id = None
         self._current_cancel = cancel
         try:
-            if cancel.cancelled() or generation != self._generation:
+            if cancel.cancelled() or generation != self._generation or self._closing:
                 return None
             if self._repo is None:
                 raise RuntimeError("Crie ou abra um projeto antes de importar.")
@@ -190,10 +223,13 @@ class Session:
             sample = self._repo.import_sample(source, cancel)
             analysis = self._repo.create_analysis(sample, options)
             analysis_id = analysis.id
+            provenance = {'original_path': str(source.resolve()), 'original_name': source.name}
+            self._repo.set_metadata(analysis_id, provenance)
             self._event("analysis_created", analysis_id, payload=self._details(analysis_id), generation=generation)
             self._state(analysis_id, "importing", "Importando no Ghidra…", generation)
-            metadata = {**self._rpc("open", analysis_id, {"analysis_dir": str(self._repo.root / "analyses" / analysis_id), "sample_path": str(self._repo.root / sample.relative_path), "options": options.to_json()}, cancel), 'original_path': str(source.resolve()), 'original_name': source.name}
+            metadata = {**provenance, **self._rpc("open", analysis_id, {"analysis_dir": str(self._repo.root / "analyses" / analysis_id), "sample_path": str(self._repo.root / sample.relative_path), "options": options.to_json()}, cancel)}
             self._opened_analysis = analysis_id
+            self._needs_reconcile.add(analysis_id)
             self._repo.set_metadata(analysis_id, metadata)
             self._event("analysis_opened", analysis_id, payload=self._details(analysis_id), generation=generation)
             if cancel.cancelled():
@@ -224,6 +260,7 @@ class Session:
             self._current_cancel = None
 
     def _index(self, analysis_id, generation=None):
+        self._needs_reconcile.add(analysis_id)
         previous, interrupt = self._current_cancel, Cancellation()
         self._current_cancel = interrupt
         try:
@@ -245,6 +282,7 @@ class Session:
                         offset += len(page.items)
                 self._repo.replace_records(analysis_id, kind, pages())
                 self._event('snapshot', analysis_id, payload={'kind': kind}, generation=generation)
+            self._needs_reconcile.discard(analysis_id)
         except Exception:
             if interrupt.cancelled():
                 raise CancelledError('Indexação interrompida.') from None
@@ -252,17 +290,21 @@ class Session:
         finally:
             self._current_cancel = previous
 
-    def _ensure_analysis_open(self, analysis_id, reconcile=False):
-        if self._opened_analysis == analysis_id and not reconcile:
+    def _ensure_analysis_open(self, analysis_id, reconcile=False, generation=None):
+        generation = self._generation if generation is None else generation
+        if generation != self._generation:
+            raise CancelledError('O projeto foi alterado.')
+        if self._opened_analysis == analysis_id and analysis_id not in self._needs_reconcile and not reconcile:
             return
-        analysis = self._repo.get_analysis(analysis_id)
-        sample = self._repo.get_sample(analysis.sample_sha256)
-        metadata = self._rpc("open", analysis_id, {"analysis_dir": str(self._repo.root / "analyses" / analysis_id), "sample_path": str(self._repo.root / sample.relative_path), "options": analysis.options.to_json()})
-        self._opened_analysis = analysis_id
-        self._repo.set_metadata(analysis_id, {**self._repo.get_metadata(analysis_id), **metadata})
-        self._repo.set_revision(analysis_id, metadata.get("revision", 0))
-        self._index(analysis_id)
-        self._event("analysis_opened", analysis_id, payload=self._details(analysis_id))
+        if self._opened_analysis != analysis_id or reconcile:
+            analysis = self._repo.get_analysis(analysis_id)
+            sample = self._repo.get_sample(analysis.sample_sha256)
+            metadata = self._rpc("open", analysis_id, {"analysis_dir": str(self._repo.root / "analyses" / analysis_id), "sample_path": str(self._repo.root / sample.relative_path), "options": analysis.options.to_json()})
+            self._opened_analysis = analysis_id
+            self._repo.set_metadata(analysis_id, {**self._repo.get_metadata(analysis_id), **metadata})
+            self._repo.set_revision(analysis_id, metadata.get("revision", 0))
+        self._index(analysis_id, generation)
+        self._event("analysis_opened", analysis_id, payload=self._details(analysis_id), generation=generation)
 
     def activate_analysis(self, analysis_id) -> Future:
         self._selection = None
@@ -277,12 +319,15 @@ class Session:
             if token != self._selection or generation != self._generation:
                 return
             try:
-                self._ensure_analysis_open(analysis_id)
+                self._ensure_analysis_open(analysis_id, generation=generation)
                 analysis = self._repo.get_analysis(analysis_id)
                 result = self._repo.get_cache(analysis_id, address, analysis.revision)
+                if result is not None and (result.error or not result.code):
+                    result = None
                 if result is None:
                     result = DecompileResult.from_json(self._rpc("decompile", analysis_id, {"address": address.to_json(), "timeout_s": analysis.options.decompile_timeout_s}))
-                    self._repo.put_cache(analysis_id, result)
+                    if result.code and not result.error:
+                        self._repo.put_cache(analysis_id, result)
                 if token == self._selection and generation == self._generation:
                     self._event("selection_result", analysis_id, token, result.revision, result.to_json(), generation)
             except Exception as exc:
@@ -297,6 +342,7 @@ class Session:
     def rename_function(self, analysis_id, address, name) -> Future:
         def rename():
             self._ensure_analysis_open(analysis_id)
+            self._needs_reconcile.add(analysis_id)
             result = self._rpc("rename", analysis_id, {"address": address.to_json(), "name": name})
             self._repo.set_revision(analysis_id, result["revision"])
             self._repo.set_metadata(analysis_id, {**self._repo.get_metadata(analysis_id), 'revision': result['revision']})
@@ -305,17 +351,60 @@ class Session:
         return self._operations.submit(rename)
 
     def set_note(self, analysis_id, address, text, bookmarked) -> Future:
-        return self._project_io(lambda repo: repo.set_note(analysis_id, address, text, bookmarked))
+        with self._write_lock:
+            if self._closing or self._transitioning or self._repo is None:
+                raise RuntimeError('Não é possível gravar uma nota durante a troca ou fechamento do projeto.')
+            repo = self._repo
+            key = (analysis_id, address)
+            future = self._writes.submit(repo.set_note, analysis_id, address, text, bookmarked)
+
+            def written(done):
+                error = done.exception()
+                with self._write_lock:
+                    if error:
+                        self._write_failures[key] = error
+                    else:
+                        self._write_failures.pop(key, None)
+                if error:
+                    self._event('error', analysis_id, payload={'message': f'A nota não foi salva: {error}'})
+            future.add_done_callback(written)
+            return future
+
+    def _drain_writes(self):
+        # A dedicated FIFO keeps accepted edits durable even when ordinary I/O
+        # reads are invalidated by a project generation change.
+        self._writes.submit(lambda: None).result()
+        with self._write_lock:
+            if self._write_failures:
+                error = next(iter(self._write_failures.values()))
+                raise RuntimeError(f'Existem notas que não foram salvas. Tente salvá-las novamente: {error}')
 
     def notes(self, analysis_id) -> Future:
         return self._project_io(lambda repo: repo.notes(analysis_id))
 
     def audit_hints(self, analysis_id) -> Future:
         from reworkbench.application.audit import review_imports
-        return self._project_io(lambda repo: review_imports(repo, analysis_id))
+        cancel = Cancellation()
+        self._background_cancels.append(cancel)
+
+        def review(repo):
+            try:
+                return review_imports(repo, analysis_id, cancel)
+            finally:
+                if cancel in self._background_cancels:
+                    self._background_cancels.remove(cancel)
+        future = self._project_io(review)
+
+        def finished(_):
+            if cancel in self._background_cancels:
+                self._background_cancels.remove(cancel)
+        future.add_done_callback(finished)
+        return future
 
     def scan_sample(self, source: Path) -> Future:
         from reworkbench.application.byte_scan import scan_bytes
+        for previous in tuple(self._scans):
+            previous.cancel()
         cancel = Cancellation()
         self._scans.append(cancel)
         executable = Path(__file__).resolve().parents[3] / 'native' / 'bytecore' / 'target' / 'release' / 'bytecore.exe'
@@ -330,6 +419,7 @@ class Session:
 
     def save(self) -> Future:
         def save():
+            self._drain_writes()
             if self._opened_analysis:
                 self._rpc('save', self._opened_analysis)
             self._event('status', payload={'message': 'Projeto salvo. Notas e amostras são persistidas automaticamente.'})
@@ -338,7 +428,18 @@ class Session:
     def export_report(self, analysis_id, destination) -> Future:
         from reworkbench.application.audit import review_imports
         from reworkbench.application.exports import export_report
-        return self._operations.submit(lambda: export_report(self._repo, analysis_id, destination, review_imports(self._repo, analysis_id)))
+        cancel = Cancellation()
+
+        def export():
+            self._current_cancel = cancel
+            try:
+                if self._closing:
+                    raise CancelledError('A aplicação está sendo encerrada.')
+                self._drain_writes()
+                return export_report(self._repo, analysis_id, destination, review_imports(self._repo, analysis_id, cancel), cancel)
+            finally:
+                self._current_cancel = None
+        return self._operations.submit(export)
 
     def export_functions(self, analysis_id, addresses, destination) -> Future:
         from reworkbench.application.exports import export_pseudocode
@@ -347,6 +448,8 @@ class Session:
         def export():
             self._current_cancel = cancel
             try:
+                if self._closing:
+                    raise CancelledError('A aplicação está sendo encerrada.')
                 self._ensure_analysis_open(analysis_id)
                 analysis = self._repo.get_analysis(analysis_id)
 
@@ -356,9 +459,20 @@ class Session:
                             raise CancelledError('Exportação interrompida.')
                         self._event('status', analysis_id, payload={'message': f'Exportando {address}…'})
                         cached = self._repo.get_cache(analysis_id, address, analysis.revision)
+                        if cached is not None and (cached.error or not cached.code):
+                            cached = None
                         if cached is None:
-                            cached = DecompileResult.from_json(self._rpc('decompile', analysis_id, {'address': address.to_json(), 'timeout_s': analysis.options.decompile_timeout_s}, cancel))
-                            self._repo.put_cache(analysis_id, cached)
+                            try:
+                                self._ensure_analysis_open(analysis_id)
+                                cached = DecompileResult.from_json(self._rpc('decompile', analysis_id, {'address': address.to_json(), 'timeout_s': analysis.options.decompile_timeout_s}, cancel))
+                                if cached.code and not cached.error:
+                                    self._repo.put_cache(analysis_id, cached)
+                            except Exception as exc:
+                                if cancel.cancelled() or self._closing:
+                                    raise CancelledError('Exportação interrompida.') from exc
+                                cached = DecompileResult(address, None, str(exc), analysis.revision)
+                                if self._worker is not None and getattr(self._worker, '_failed', False):
+                                    self._drop_worker()
                         yield cached
                 return export_pseudocode(self._repo, analysis_id, results(), destination)
             finally:
@@ -379,12 +493,15 @@ class Session:
                     pass
         for cancel in tuple(self._scans):
             cancel.cancel()
+        for cancel in tuple(self._background_cancels):
+            cancel.cancel()
         if self._worker is not None and self._active_request is None:
             interrupt = getattr(self._worker, 'interrupt_startup', None)
             if interrupt:
                 interrupt()
 
     def _drop_worker(self):
+        self._worker_epoch += 1
         if self._worker:
             self._worker.close()
             self._worker = None
@@ -396,15 +513,35 @@ class Session:
         self._closing = True
         self._selection = None
         self.cancel_active()
-        for cancel in self._imports:
-            cancel.cancel()
+        for cancel in tuple(self._imports):
+            try:
+                cancel.cancel()
+            except (OSError, RuntimeError):
+                pass
 
         def cleanup():
-            self._drop_worker()
-            self._io.shutdown(wait=True)
-            if self._repo:
-                self._repo.close()
-                self._repo = None
-        self._close_future = self._operations.submit(cleanup)
-        self._close_future.add_done_callback(lambda _: self._operations.shutdown(wait=False))
-        return self._close_future
+            # Refuse a clean close while an accepted note failed to reach disk.
+            # Executors remain available so the editor can retry that write.
+            self._drain_writes()
+            try:
+                try:
+                    self._drop_worker()
+                finally:
+                    self._io.shutdown(wait=True, cancel_futures=True)
+                    self._writes.shutdown(wait=True)
+                    if self._repo:
+                        self._repo.close()
+                        self._repo = None
+            finally:
+                self._closed = True
+
+        def finalized(done):
+            if self._closed:
+                self._operations.shutdown(wait=False)
+            else:
+                self._closing = False
+                self._close_future = None
+        close_future = self._operations.submit(cleanup)
+        self._close_future = close_future
+        close_future.add_done_callback(finalized)
+        return close_future

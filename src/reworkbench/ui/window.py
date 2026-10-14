@@ -14,7 +14,7 @@ from reworkbench.ui.code_view import CodeView, NavigationHistory, table
 from reworkbench.ui.hex_view import HexView
 from reworkbench.ui.import_dialog import ImportDialog
 from reworkbench.ui.investigation import InvestigationPanel
-from reworkbench.ui.models import PagedTableModel
+from reworkbench.ui.models import PagedTableModel, PagingControls
 from reworkbench.ui.settings import SettingsDialog
 from reworkbench.ui.triage import TriageView
 
@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         self._jobs = 0
         self._engine_busy = False
         self._closing = self._allow_close = False
+        self._shutdown_future = None
         self.history = NavigationHistory()
         self.models = {}
         self.docks = {}
@@ -111,7 +112,7 @@ class MainWindow(QMainWindow):
         self.open_project_action = self._action('Abrir projeto…', self.open_project, QKeySequence.Open)
         self.import_action = self._action('Importar binário…', self.import_sample, 'Ctrl+I')
         self.bytes_action = self._action('Examinar bytes…', self.examine_bytes, 'Ctrl+Shift+O')
-        self.save_action = self._action('Salvar projeto', lambda: self.watch(self.session.save(), busy=True), QKeySequence.Save)
+        self.save_action = self._action('Salvar projeto', self.save_project, QKeySequence.Save)
         self.settings_action = self._action('Configurações do motor…', self.configure)
         self.cancel_action = self._action('Interromper', self.cancel, 'Esc')
         self.cancel_action.setEnabled(False)
@@ -223,9 +224,7 @@ class MainWindow(QMainWindow):
             setattr(self, f'{kind}_view', view)
             view.doubleClicked.connect(lambda index, k=kind: self._record_activated(k, index))
             layout.addWidget(view)
-            count = QLabel('0 registros')
-            layout.addWidget(count)
-            model.pageReady.connect(lambda total, label=count: label.setText(f'{total:,} registros' if total >= 0 else 'Carregando…'))
+            layout.addWidget(PagingControls(model, panel))
             model.failed.connect(self._error)
             timer = QTimer(search)
             timer.setSingleShot(True)
@@ -245,7 +244,7 @@ class MainWindow(QMainWindow):
         result.set_result(Page((), 0, 0))
         return result
 
-    def watch(self, future, callback=None, *, busy=False, scoped=True):
+    def watch(self, future, callback=None, *, busy=False, scoped=True, on_error=None):
         generation = self._generation if scoped else None
         if busy:
             self._jobs += 1
@@ -256,30 +255,42 @@ class MainWindow(QMainWindow):
             window = reference()
             if window is not None:
                 try:
-                    window.futureReady.emit((result, callback, generation, busy))
+                    window.futureReady.emit((result, callback, generation, busy, on_error))
                 except RuntimeError:
                     pass
         future.add_done_callback(done)
         return future
 
     def _future_ready(self, item):
-        future, callback, generation, busy = item
+        future, callback, generation, busy, on_error = item
         if busy:
             self._jobs = max(0, self._jobs - 1)
             self._update_busy()
-        if generation is not None and (generation != self._generation or self._closing):
+        if self._closing and future is not self._shutdown_future:
+            return
+        if generation is not None and generation != self._generation:
             return
         try:
             result = future.result()
             if callback:
                 callback(result)
-        except CancelledError:
+        except CancelledError as exc:
             self.status.setText('Operação interrompida.')
+            if on_error:
+                on_error(exc)
         except Exception as exc:
             self._error(str(exc))
-            if self._closing and generation is None:
-                self._allow_close = True
-                self.close()
+            if on_error:
+                on_error(exc)
+            if self._closing and future is self._shutdown_future:
+                if self.session.closed:
+                    self._allow_close = True
+                    self.close()
+                else:
+                    self._closing = False
+                    self.setEnabled(True)
+                    self.investigation.mark_unsaved()
+                    self._update_busy()
 
     def _error(self, message):
         self.status.setText(message)
@@ -313,6 +324,8 @@ class MainWindow(QMainWindow):
         self.code.clear()
         self.investigation.set_selection(None, None)
         self.triage.clear()
+        self._scan_token += 1
+        self.hex.clear()
         self.metadata.clear()
         self.stack.setCurrentIndex(0)
         for model in self.models.values():
@@ -321,12 +334,22 @@ class MainWindow(QMainWindow):
 
     def _request_project(self, path, create):
         self.investigation.flush()
-        self._clear_analysis()
         future = self.session.create_project(Path(path)) if create else self.session.open_project(Path(path))
         self._generation = self.session.generation
         self.status.setText('Abrindo projeto…')
-        self.watch(future, busy=True)
+        self.setEnabled(False)
+
+        def failed(error):
+            self.setEnabled(True)
+            if self.session.project_root is None:
+                self._clear_analysis()
+            self._project_actions(self.session.project_root is not None)
+        self.watch(future, busy=True, on_error=failed)
         return future
+
+    def save_project(self):
+        self.investigation.flush()
+        self.watch(self.session.save(), busy=True)
 
     def new_project(self):
         parent = QFileDialog.getExistingDirectory(self, 'Pasta para o novo projeto')
@@ -452,6 +475,8 @@ class MainWindow(QMainWindow):
         kind, data = event['kind'], event.get('payload', {})
         analysis_id = event.get('analysis_id')
         if kind == 'project_opened':
+            self._clear_analysis()
+            self.setEnabled(True)
             self._project_actions(True)
             self.status.setText(f'Projeto: {data["root"]}')
             self.settings.setValue('project/last', data['root'])
@@ -489,6 +514,7 @@ class MainWindow(QMainWindow):
             model = self.models.get(data['kind'])
             if model:
                 model.set_query(model.query)
+            self.code.refresh_records(data['kind'])
         elif kind == 'state':
             state = data['state']
             self._engine_busy = state in ('queued', 'importing', 'analyzing')
@@ -611,7 +637,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue('window/geometry', self.saveGeometry())
             self.settings.setValue('window/state', self.saveState())
             self.settings.sync()
-            self.hex._executor.shutdown(wait=False, cancel_futures=True)
+            self.hex.shutdown()
             event.accept()
             return
         event.ignore()
@@ -624,4 +650,5 @@ class MainWindow(QMainWindow):
             def closed(_):
                 self._allow_close = True
                 self.close()
-            self.watch(self.session.close(), closed, scoped=False)
+            self._shutdown_future = self.session.close()
+            self.watch(self._shutdown_future, closed, scoped=False)

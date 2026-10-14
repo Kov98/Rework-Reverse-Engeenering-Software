@@ -20,3 +20,17 @@ As evidências prévias não validam a versão atual inteira. A interface e as a
 - Scripts de instalação, inicialização e diagnóstico.
 
 Somente uma revisão estática pode ser realizada nesta etapa. A compilação do auxiliar Rust, os testes automatizados e a verificação manual dos fluxos da interface ficam pendentes até nova orientação do usuário.
+
+A revisão independente identificou nove pontos de integração e de limites de memória. O código foi alterado para tratá-los em uma única rodada, sem reexecução nem nova revisão independente. As decisões e as alterações estão registradas em [implementation-notes.md](implementation-notes.md).
+
+## Verificações pendentes para uma etapa posterior
+
+1. Inicialização da interface com e sem motor configurado, configuração persistente e restauração dos painéis.
+2. Importação real da matriz de arquiteturas, incluindo seleção de imagem universal, base e contexto Thumb.
+3. Navegação função → assembly → bytes → referências → função, incluindo seleção durante a indexação e resultados atrasados.
+4. Renomeação, notas e marcadores após fechar e reabrir, com reconstrução do índice a partir do programa salvo.
+5. Cancelamento e fechamento durante início da JVM, autoanálise, indexação, decompilação e triagem; verificar os processos filhos.
+6. Exportação íntegra e substituição atômica diante de falhas, endereços de 64 bits, estados parciais e preservação das amostras.
+7. Compilação separada do auxiliar Rust e comparação com a alternativa Python para strings que cruzam intervalos de leitura.
+
+Essa lista registra trabalho de validação futuro e não representa verificações já realizadas.

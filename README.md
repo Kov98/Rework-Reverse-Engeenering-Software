@@ -2,7 +2,7 @@
 
 Bancada desktop de engenharia reversa para Windows de 64 bits. A interface usa Qt e coordena o Ghidra em um processo separado para importar binários, analisar funções e gerar pseudocódigo C aproximado.
 
-O código da primeira versão está implementado. **As alterações mais recentes não foram executadas, testadas nem compiladas, conforme solicitado.** O registro de validação anterior está em [docs/validation.md](docs/validation.md).
+O código da primeira versão está implementado na branch `feat/reworkbench`, em `.worktrees/implementation`. **As alterações mais recentes não foram executadas, testadas nem compiladas, conforme solicitado.** O registro de validação anterior está em [docs/validation.md](docs/validation.md), com [decisões e revisão estática](docs/implementation-notes.md).
 
 ## O que está implementado
 
@@ -67,6 +67,8 @@ O diagnóstico é uma ação separada e somente será executado se você o solic
 | Gradle | Build do projeto Ghidra original; esta bancada utiliza uma distribuição pronta |
 
 O produto não precisa reconstruir o Ghidra com Gradle. Os componentes Java, C/C++ e as especificações SLEIGH pertencem à distribuição do motor e não estão reimplementados ou incluídos neste repositório.
+
+As tabelas carregam páginas de 200 registros e mantêm até 1.000 linhas por intervalo na memória. Use Anterior / Próximos para percorrer todos os resultados. Strings definidas têm prévia de até 4.096 caracteres; o relatório indica quando houve truncamento, e os bytes da amostra continuam disponíveis no visor.
 
 ```text
 src/reworkbench/

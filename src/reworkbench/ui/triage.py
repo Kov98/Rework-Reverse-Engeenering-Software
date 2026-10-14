@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QLabel, QLineEdit, QVBoxLayout, QWidget
 
 from reworkbench.domain import Page
 from reworkbench.ui.code_view import table
-from reworkbench.ui.models import PagedTableModel
+from reworkbench.ui.models import PagedTableModel, PagingControls
 
 
 class TriageView(QWidget):
@@ -24,6 +24,7 @@ class TriageView(QWidget):
         self.view = table(self.model)
         self.view.doubleClicked.connect(self._activated)
         layout.addWidget(self.view)
+        layout.addWidget(PagingControls(self.model, self))
         self.search.textChanged.connect(self.model.set_query)
 
     def _fetch(self, offset, query):
