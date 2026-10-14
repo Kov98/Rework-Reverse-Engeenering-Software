@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.bin -text
+*.exe -text
+*.dll -text
+*.elf -text
+*.macho -text
