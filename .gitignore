@@ -1,0 +1,11 @@
+.worktrees/
+.venv/
+.tools/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.superpowers/
+*.log
