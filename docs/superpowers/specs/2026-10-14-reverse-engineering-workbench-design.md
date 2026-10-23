@@ -1,5 +1,7 @@
 # Bancada desktop de engenharia reversa — especificação da primeira versão
 
+> Especificação histórica do protótipo. Substituída pela direção independente em [2026-10-14-independent-native-workbench-design.md](2026-10-14-independent-native-workbench-design.md), após esclarecimento explícito de que Ghidra é apenas inspiração. As dependências Ghidra/PyGhidra abaixo não se aplicam ao aplicativo nativo.
+
 Data: 2026-10-14
 
 Estado: arquitetura, primeiro marco e especificação escrita aprovados pelo usuário em 2026-10-14.
