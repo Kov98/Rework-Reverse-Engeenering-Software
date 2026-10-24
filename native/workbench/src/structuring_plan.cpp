@@ -1,4 +1,8 @@
 #include "reworkbench/structuring_plan.hpp"
+#include "reworkbench/phi_transfers.hpp"
+#include "reworkbench/parallel_copy_plan.hpp"
+#include "reworkbench/edge_effects.hpp"
+#include "reworkbench/control_safety.hpp"
 
 #include <QHash>
 #include <QSet>
@@ -64,11 +68,66 @@ HirStructuringPlan plan_hir_structuring(
         "no machine-level branch, PHI, memory operation or call is rewritten.");
     report.ir_structural_checks_passed =
         hir.ir_audit.structural_checks_passed;
+    const auto phi = observe_hir_phi_transfers(hir, stop);
+    report.phi_edge_associations_complete =
+        phi.all_edges_covered && phi.all_assignments_well_formed
+        && !phi.limited;
+    report.phi_parallel_dependency_edges =
+        phi.edges_with_parallel_dependency;
+    report.phi_copy_cycle_edges = phi.edges_with_cycles;
+    const auto copies = plan_parallel_phi_copies(phi, stop);
+    report.phi_copy_schedule_structurally_consistent =
+        copies.all_schedules_structurally_consistent && !copies.limited;
+    report.phi_virtual_temporaries_planned =
+        copies.total_virtual_temporaries;
+    report.phi_symbolic_state_transfers =
+        copies.total_symbolic_state_transfers;
+    const auto edges = observe_hir_edge_effects(hir, copies, stop);
+    report.edge_effect_contracts_accounted_for =
+        edges.all_edges_accounted_for && !edges.limited;
+    report.edge_effects_unresolved = edges.unresolved_edges;
+    const auto control_safety = observe_hir_control_safety(hir, edges, stop);
+    report.control_edges_accounted_for =
+        control_safety.all_observed_edges_accounted_for && !control_safety.limited;
+    report.critical_edges_detected = control_safety.critical_edges;
+    report.possible_nonreturning_call_blocks =
+        control_safety.potentially_nonreturning_calls;
+    report.unresolved_control_terminators =
+        control_safety.unresolved_terminators;
     // An internally consistent SSA graph cannot establish preservation
     // of machine semantics, memory order, PHI edge values or exceptions.
     if (!report.ir_structural_checks_passed)
         report.unproved_rewrite_obligations
             << QStringLiteral("machine_ir_ssa_static_invariants");
+    if (!report.phi_edge_associations_complete)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("phi_edges_not_fully_accounted");
+    if (!report.edge_effect_contracts_accounted_for)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("edge_effect_contracts_incomplete");
+    if (!report.control_edges_accounted_for)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("control_edges_not_fully_accounted");
+    if (report.critical_edges_detected)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("critical_edge_splitting_not_implemented");
+    if (report.possible_nonreturning_call_blocks)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("call_noreturn_semantics_unverified");
+    if (report.unresolved_control_terminators)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("terminator_semantics_unresolved");
+    if (report.edge_effects_unresolved)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("edge_effect_semantics_unresolved");
+    report.unproved_rewrite_obligations
+        << QStringLiteral("exception_and_call_effects_not_verified");
+    if (!report.phi_copy_schedule_structurally_consistent)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("parallel_copy_plan_incomplete");
+    if (phi.edges_with_parallel_dependency)
+        report.unproved_rewrite_obligations
+            << QStringLiteral("parallel_phi_copy_lowering_not_implemented");
     report.unproved_rewrite_obligations
         << QStringLiteral("instruction_semantics_equivalence")
         << QStringLiteral("phi_edge_lowering_preserves_values")
@@ -127,6 +186,12 @@ HirStructuringPlan plan_hir_structuring(
     }
 
     const bool structure_reliable = report.ir_structural_checks_passed
+        && report.phi_edge_associations_complete
+        && report.phi_copy_schedule_structurally_consistent
+        && report.edge_effect_contracts_accounted_for
+        && report.control_edges_accounted_for
+        && report.unresolved_control_terminators == 0
+        && report.edge_effects_unresolved == 0
         && !hir.partial && !hir.limited
         && hir.report_complete && control.cfg_closed
         && !control.partial && !control.limited
@@ -171,6 +236,12 @@ HirStructuringPlan plan_hir_structuring(
         plan.member_blocks = candidate.member_blocks;
         QSet<qsizetype> members;
         for (qsizetype node : candidate.member_blocks) members.insert(node);
+        if (!report.phi_edge_associations_complete)
+            block(plan, QStringLiteral("phi_edge_associations_unproven"));
+        if (report.unresolved_control_terminators != 0)
+            block(plan, QStringLiteral("unresolved_control_terminators"));
+        if (report.edge_effects_unresolved != 0)
+            block(plan, QStringLiteral("unresolved_edge_effect_semantics"));
         if (!structure_reliable)
             block(plan, QStringLiteral("incomplete_or_unclosed_cfg"));
         if (!candidate.single_entry_proven_in_observed_cfg)
@@ -222,6 +293,12 @@ HirStructuringPlan plan_hir_structuring(
         };
         if (!report.ir_structural_checks_passed)
             block(plan, QStringLiteral("ssa_static_invariants_unproven"));
+        if (!report.phi_edge_associations_complete)
+            block(plan, QStringLiteral("phi_edge_associations_unproven"));
+        if (report.unresolved_control_terminators != 0)
+            block(plan, QStringLiteral("unresolved_control_terminators"));
+        if (report.edge_effects_unresolved != 0)
+            block(plan, QStringLiteral("unresolved_edge_effect_semantics"));
         if (!joins_reliable)
             block(plan, QStringLiteral("post_dominance_not_reliable"));
         const bool valid_ids = valid(conditional.header_block, count)

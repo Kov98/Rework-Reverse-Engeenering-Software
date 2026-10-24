@@ -103,6 +103,10 @@ struct Operand {
     OperandKind kind = OperandKind::Other;
     QString reg;
     quint64 immediate = 0;
+    // x86/x64 encoded immediate size, from Capstone's instruction encoding.
+    // Distinct from width_bits, which describes the logical operand size.
+    // Zero means absent or unverified; consumers must not guess.
+    int encoded_immediate_bits = 0;
     QString memory_base;
     QString memory_index;
     int memory_scale = 1;

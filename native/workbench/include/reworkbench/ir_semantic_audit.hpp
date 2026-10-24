@@ -28,6 +28,7 @@ struct IrSemanticAudit {
     bool operand_types_consistent = false;
     bool ssa_uses_dominated = false;
     bool memory_tokens_well_formed = false;
+    bool memory_state_order_consistent = false;
     bool opaque_effects_present = false;
     bool issues_truncated = false;
     bool ir_incomplete = true;

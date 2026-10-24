@@ -8,6 +8,10 @@
 #include "reworkbench/hir.hpp"
 #include "reworkbench/control_regions.hpp"
 #include "reworkbench/structuring_plan.hpp"
+#include "reworkbench/phi_transfers.hpp"
+#include "reworkbench/parallel_copy_plan.hpp"
+#include "reworkbench/edge_effects.hpp"
+#include "reworkbench/control_safety.hpp"
 #include "reworkbench/interprocedural.hpp"
 #include "reworkbench/effect_summary.hpp"
 #include "reworkbench/investigation.hpp"
@@ -728,6 +732,7 @@ QJsonObject ir_semantic_audit_json(const IrSemanticAudit& audit) {
         { "operand_types_consistent", audit.operand_types_consistent },
         { "ssa_uses_dominated", audit.ssa_uses_dominated },
         { "memory_tokens_well_formed", audit.memory_tokens_well_formed },
+        { "memory_state_order_consistent", audit.memory_state_order_consistent },
         { "opaque_effects_present", audit.opaque_effects_present },
         { "ir_incomplete", audit.ir_incomplete },
         { "structural_checks_passed", audit.structural_checks_passed },
@@ -736,6 +741,308 @@ QJsonObject ir_semantic_audit_json(const IrSemanticAudit& audit) {
         { "issues_truncated", audit.issues_truncated || audit.issues.size() > max_display },
         { "issues", issues },
         { "warnings_detail", QJsonArray::fromStringList(audit.warnings_detail) }
+    };
+}
+QJsonObject phi_transfers_json(const HirPhiTransferObservation& report) {
+    constexpr qsizetype max_visible_edges = 128;
+    constexpr qsizetype max_visible_assignments_per_edge = 96;
+    QJsonArray edges, warnings;
+    bool assignment_display_truncated = false;
+    for (qsizetype i = 0; i < report.edges.size()
+            && i < max_visible_edges; ++i) {
+        const auto& edge = report.edges[i];
+        QJsonArray assignments;
+        for (qsizetype j = 0; j < edge.simultaneous_assignments.size()
+                && j < max_visible_assignments_per_edge; ++j) {
+            const auto& a = edge.simultaneous_assignments[j];
+            assignments.append(QJsonObject{
+                { "target_phi_id", static_cast<int>(a.target_phi_id) },
+                { "source_value_id", static_cast<int>(a.source_value_id) },
+                { "representation", a.representation },
+                { "width_bits", a.width_bits },
+                { "identical_value", a.identical_value },
+                { "is_machine_state_token", a.is_machine_state_token },
+                { "sourced_from_opaque_projection", a.sourced_from_opaque_projection }
+            });
+        }
+        if (edge.simultaneous_assignments.size()
+                > max_visible_assignments_per_edge)
+            assignment_display_truncated = true;
+        edges.append(QJsonObject{
+            { "predecessor_block", static_cast<int>(edge.predecessor_block) },
+            { "successor_block", static_cast<int>(edge.successor_block) },
+            { "synthetic_entry", edge.synthetic_entry },
+            { "assignment_count", static_cast<int>(
+                edge.simultaneous_assignments.size()) },
+            { "simultaneous_assignments", assignments },
+            { "assignments_complete", edge.assignments_complete },
+            { "has_parallel_dependency", edge.has_parallel_dependency },
+            { "has_assignment_cycle", edge.has_assignment_cycle },
+            { "requires_machine_state_lowering", edge.requires_machine_state_lowering },
+            { "touches_opaque_state", edge.touches_opaque_state },
+            { "rewrite_authorized", edge.rewrite_authorized },
+            { "blockers", QJsonArray::fromStringList(edge.blockers) }
+        });
+    }
+    for (const auto& warning : report.warnings) warnings.append(warning);
+    return {
+        { "version", report.version },
+        { "total_edges_reported", static_cast<int>(report.edges.size()) },
+        { "reachable_cfg_edges_expected", static_cast<int>(
+            report.reachable_cfg_edges_expected) },
+        { "synthetic_entry_edges_expected", static_cast<int>(
+            report.synthetic_entry_edges_expected) },
+        { "total_assignments", static_cast<int>(report.total_assignments) },
+        { "edges_with_parallel_dependency", static_cast<int>(
+            report.edges_with_parallel_dependency) },
+        { "edges_with_cycles", static_cast<int>(report.edges_with_cycles) },
+        { "blocked_edges", static_cast<int>(report.blocked_edges) },
+        { "ir_static_audit_passed", report.ir_static_audit_passed },
+        { "all_edges_covered", report.all_edges_covered },
+        { "all_assignments_well_formed", report.all_assignments_well_formed },
+        { "opaque_barriers_present", report.opaque_barriers_present },
+        { "graph_partial", report.graph_partial },
+        { "limited", report.limited },
+        { "rewrite_authorized", report.rewrite_authorized },
+        { "display_truncated", report.edges.size() > max_visible_edges
+            || assignment_display_truncated },
+        { "edges", edges },
+        { "warnings", warnings }
+    };
+}
+QJsonObject parallel_copy_plan_json(const HirParallelCopyPlan& report) {
+    constexpr qsizetype max_display_edges = 128;
+    constexpr qsizetype max_display_steps = 128;
+    QJsonArray edges, warnings;
+    bool steps_truncated = false;
+    for (qsizetype i = 0; i < report.edges.size()
+            && i < max_display_edges; ++i) {
+        const auto& edge = report.edges[i];
+        QJsonArray actions;
+        for (qsizetype j = 0; j < edge.steps.size()
+                && j < max_display_steps; ++j) {
+            const auto& step = edge.steps[j];
+            QJsonObject action{
+                { "phase", step.phase },
+                { "operation", step.operation },
+                { "source_value_id", static_cast<int>(step.source_value_id) },
+                { "target_phi_id", static_cast<int>(step.target_phi_id) },
+                { "representation", step.representation },
+                { "width_bits", step.width_bits },
+                { "performs_machine_effect", step.performs_machine_effect }
+            };
+            if (step.virtual_temp_id)
+                action.insert("virtual_temp_id",
+                    static_cast<int>(*step.virtual_temp_id));
+            actions.append(action);
+        }
+        if (edge.steps.size() > max_display_steps)
+            steps_truncated = true;
+        edges.append(QJsonObject{
+            { "predecessor_block", static_cast<int>(edge.predecessor_block) },
+            { "successor_block", static_cast<int>(edge.successor_block) },
+            { "synthetic_entry", edge.synthetic_entry },
+            { "steps_count", static_cast<int>(edge.steps.size()) },
+            { "steps", actions },
+            { "captured_sources", static_cast<int>(edge.captured_sources) },
+            { "scalar_writes_planned", static_cast<int>(edge.scalar_writes_planned) },
+            { "symbolic_state_transfers", static_cast<int>(edge.symbolic_state_transfers) },
+            { "identity_transfers", static_cast<int>(edge.identity_transfers) },
+            { "contains_dependency_cycle", edge.contains_dependency_cycle },
+            { "has_parallel_dependencies", edge.has_parallel_dependencies },
+            { "has_opaque_barrier", edge.has_opaque_barrier },
+            { "assignments_accounted_for", edge.assignments_accounted_for },
+            { "schedule_structurally_consistent", edge.schedule_structurally_consistent },
+            { "lowering_executed", edge.lowering_executed },
+            { "rewrite_authorized", edge.rewrite_authorized },
+            { "blockers", QJsonArray::fromStringList(edge.blockers) }
+        });
+    }
+    for (const auto& message : report.warnings) warnings.append(message);
+    return {
+        { "version", report.version },
+        { "expected_edge_count", static_cast<int>(report.expected_edge_count) },
+        { "total_edges_reported", static_cast<int>(report.edges.size()) },
+        { "total_virtual_temporaries", static_cast<int>(report.total_virtual_temporaries) },
+        { "total_scalar_writes_planned", static_cast<int>(report.total_scalar_writes_planned) },
+        { "total_symbolic_state_transfers",
+            static_cast<int>(report.total_symbolic_state_transfers) },
+        { "total_edges_with_cycles", static_cast<int>(report.total_edges_with_cycles) },
+        { "blocked_edges", static_cast<int>(report.blocked_edges) },
+        { "all_edges_accounted_for", report.all_edges_accounted_for },
+        { "all_schedules_structurally_consistent",
+            report.all_schedules_structurally_consistent },
+        { "source_snapshot_before_any_write",
+            report.source_snapshot_before_any_write },
+        { "machine_ir_unchanged", report.machine_ir_unchanged },
+        { "lowering_executed", report.lowering_executed },
+        { "rewrite_authorized", report.rewrite_authorized },
+        { "limited", report.limited },
+        { "partial", report.partial },
+        { "display_truncated", report.edges.size() > max_display_edges
+            || steps_truncated },
+        { "edges", edges },
+        { "warnings", warnings }
+    };
+}
+QJsonObject edge_effects_json(const HirEdgeEffectsObservation& report) {
+    constexpr qsizetype max_display_edges = 96;
+    constexpr qsizetype max_display_actions = 96;
+    QJsonArray edges, warnings;
+    bool actions_truncated = false;
+    auto serialize_actions = [&](const QVector<HirEdgeBoundaryAction>& actions) {
+        QJsonArray out;
+        for (qsizetype i = 0; i < actions.size()
+                && i < max_display_actions; ++i) {
+            const auto& action = actions[i];
+            QJsonObject item{
+                { "location", action.location },
+                { "kind", action.kind },
+                { "source_value_id", static_cast<int>(action.source_value_id) },
+                { "target_phi_id", static_cast<int>(action.target_phi_id) },
+                { "representation", action.representation },
+                { "width_bits", action.width_bits },
+                { "machine_effect_executed", action.machine_effect_executed }
+            };
+            if (action.virtual_temp_id)
+                item.insert("virtual_temp_id",
+                    static_cast<int>(*action.virtual_temp_id));
+            out.append(item);
+        }
+        if (actions.size() > max_display_actions)
+            actions_truncated = true;
+        return out;
+    };
+    for (qsizetype i = 0; i < report.edges.size()
+            && i < max_display_edges; ++i) {
+        const auto& edge = report.edges[i];
+        QJsonArray effects;
+        for (quint32 id : edge.predecessor_effect_ir_ids)
+            effects.append(static_cast<int>(id));
+        edges.append(QJsonObject{
+            { "predecessor_block", static_cast<int>(edge.predecessor_block) },
+            { "successor_block", static_cast<int>(edge.successor_block) },
+            { "synthetic_entry", edge.synthetic_entry },
+            { "predecessor_terminator", edge.predecessor_terminator },
+            { "capture_boundary", edge.capture_boundary },
+            { "apply_boundary", edge.apply_boundary },
+            { "capture_count", static_cast<int>(edge.captures.size()) },
+            { "application_count", static_cast<int>(edge.applications.size()) },
+            { "captures", serialize_actions(edge.captures) },
+            { "applications", serialize_actions(edge.applications) },
+            { "predecessor_effect_ir_ids", effects },
+            { "predecessor_effect_count", static_cast<int>(
+                edge.predecessor_effect_count) },
+            { "effect_samples_truncated", edge.effect_samples_truncated },
+            { "cfg_edge_observed", edge.cfg_edge_observed },
+            { "phi_schedule_accounted_for", edge.phi_schedule_accounted_for },
+            { "predecessor_has_opaque_effects", edge.predecessor_has_opaque_effects },
+            { "predecessor_has_potentially_faulting_load",
+                edge.predecessor_has_potentially_faulting_load },
+            { "exceptional_control_unknown", edge.exceptional_control_unknown },
+            { "effect_order_preservation_proven",
+                edge.effect_order_preservation_proven },
+            { "lowering_executed", edge.lowering_executed },
+            { "rewrite_authorized", edge.rewrite_authorized },
+            { "blockers", QJsonArray::fromStringList(edge.blockers) }
+        });
+    }
+    for (const auto& w : report.warnings) warnings.append(w);
+    return {
+        { "version", report.version },
+        { "expected_edges", static_cast<int>(report.expected_edges) },
+        { "total_edges_reported", static_cast<int>(report.edges.size()) },
+        { "total_capture_actions", static_cast<int>(report.total_capture_actions) },
+        { "total_apply_actions", static_cast<int>(report.total_apply_actions) },
+        { "edges_with_opaque_effects", static_cast<int>(
+            report.edges_with_opaque_effects) },
+        { "unresolved_edges", static_cast<int>(report.unresolved_edges) },
+        { "all_edges_accounted_for", report.all_edges_accounted_for },
+        { "machine_ir_unchanged", report.machine_ir_unchanged },
+        { "lowering_executed", report.lowering_executed },
+        { "rewrite_authorized", report.rewrite_authorized },
+        { "limited", report.limited },
+        { "partial", report.partial },
+        { "display_truncated", report.edges.size() > max_display_edges
+            || actions_truncated },
+        { "edges", edges },
+        { "warnings", warnings }
+    };
+}
+QJsonObject control_safety_json(const HirControlSafetyObservation& report) {
+    constexpr qsizetype max_display = 96;
+    auto numbers = [](const QVector<qsizetype>& values) {
+        QJsonArray array;
+        for (qsizetype id : values) array.append(static_cast<int>(id));
+        return array;
+    };
+    QJsonArray terminators, edges;
+    for (qsizetype i = 0; i < report.terminators.size()
+            && i < max_display; ++i) {
+        const auto& term = report.terminators[i];
+        terminators.append(QJsonObject{
+            { "block_index", static_cast<int>(term.block_index) },
+            { "observed_kind", term.observed_kind },
+            { "normalized_kind", term.normalized_kind },
+            { "observed_successors", numbers(term.observed_successors) },
+            { "observed_successor_set_consistent",
+                term.observed_successor_set_consistent },
+            { "opaque_call_seen_in_block", term.opaque_call_seen_in_block },
+            { "call_noreturn_unverified", term.call_noreturn_unverified },
+            { "indirect_or_external_target_possible",
+                term.indirect_or_external_target_possible },
+            { "exceptional_successors_unverified",
+                term.exceptional_successors_unverified },
+            { "source_terminator_semantics_proven",
+                term.source_terminator_semantics_proven },
+            { "blockers", QJsonArray::fromStringList(term.blockers) }
+        });
+    }
+    for (qsizetype i = 0; i < report.edges.size()
+            && i < max_display; ++i) {
+        const auto& edge = report.edges[i];
+        edges.append(QJsonObject{
+            { "predecessor_block", static_cast<int>(edge.predecessor_block) },
+            { "successor_block", static_cast<int>(edge.successor_block) },
+            { "branch_arm", edge.branch_arm },
+            { "cfg_reciprocal_edge", edge.cfg_reciprocal_edge },
+            { "critical_edge_in_observed_cfg",
+                edge.critical_edge_in_observed_cfg },
+            { "needs_edge_split_if_lowered",
+                edge.needs_edge_split_if_lowered },
+            { "effect_contract_found", edge.effect_contract_found },
+            { "effect_contract_unresolved", edge.effect_contract_unresolved },
+            { "exceptional_transfer_unverified",
+                edge.exceptional_transfer_unverified },
+            { "rewriting_safe", edge.rewriting_safe },
+            { "blockers", QJsonArray::fromStringList(edge.blockers) }
+        });
+    }
+    return {
+        { "version", report.version },
+        { "reachable_blocks", static_cast<int>(report.reachable_blocks) },
+        { "critical_edges", static_cast<int>(report.critical_edges) },
+        { "potentially_nonreturning_call_blocks",
+            static_cast<int>(report.potentially_nonreturning_calls) },
+        { "unresolved_terminators",
+            static_cast<int>(report.unresolved_terminators) },
+        { "edges_needing_splitting",
+            static_cast<int>(report.edges_needing_splitting) },
+        { "missing_effect_contracts",
+            static_cast<int>(report.missing_effect_contracts) },
+        { "all_observed_edges_accounted_for",
+            report.all_observed_edges_accounted_for },
+        { "exceptions_and_indirects_proven",
+            report.exceptions_and_indirects_proven },
+        { "source_control_verified", report.source_control_verified },
+        { "rewriting_authorized", report.rewriting_authorized },
+        { "limited", report.limited },
+        { "partial", report.partial },
+        { "display_truncated", report.terminators.size() > max_display
+            || report.edges.size() > max_display },
+        { "terminators", terminators },
+        { "edges", edges },
+        { "warnings", QJsonArray::fromStringList(report.warnings) }
     };
 }
 QJsonObject structuring_plan_json(const HirStructuringPlan& plan) {
@@ -798,6 +1105,26 @@ QJsonObject structuring_plan_json(const HirStructuringPlan& plan) {
         { "uncovered_reachable_blocks", numbers(plan.uncovered_reachable_blocks) },
         { "raw_cfg_preserved", plan.raw_cfg_preserved },
         { "ir_structural_checks_passed", plan.ir_structural_checks_passed },
+        { "phi_edge_associations_complete", plan.phi_edge_associations_complete },
+        { "phi_parallel_dependency_edges", static_cast<int>(plan.phi_parallel_dependency_edges) },
+        { "phi_copy_cycle_edges", static_cast<int>(plan.phi_copy_cycle_edges) },
+        { "phi_copy_schedule_structurally_consistent",
+            plan.phi_copy_schedule_structurally_consistent },
+        { "phi_virtual_temporaries_planned",
+            static_cast<int>(plan.phi_virtual_temporaries_planned) },
+        { "phi_symbolic_state_transfers",
+            static_cast<int>(plan.phi_symbolic_state_transfers) },
+        { "edge_effect_contracts_accounted_for",
+            plan.edge_effect_contracts_accounted_for },
+        { "edge_effects_unresolved",
+            static_cast<int>(plan.edge_effects_unresolved) },
+        { "control_edges_accounted_for", plan.control_edges_accounted_for },
+        { "critical_edges_detected",
+            static_cast<int>(plan.critical_edges_detected) },
+        { "possible_nonreturning_call_blocks",
+            static_cast<int>(plan.possible_nonreturning_call_blocks) },
+        { "unresolved_control_terminators",
+            static_cast<int>(plan.unresolved_control_terminators) },
         { "unproved_rewrite_obligations",
             QJsonArray::fromStringList(plan.unproved_rewrite_obligations) },
         { "emitted_source_code", plan.emitted_source_code },
@@ -985,7 +1312,7 @@ QJsonObject summary(const Context& context) {
 QJsonObject execute(const QString& command, Context& context) {
     if (command == QStringLiteral("capabilities")) return {{"engine", AnalysisSnapshot{}.engine_version}, {"decoder", decoder_description()},
         {"decompiler", "own scalar x86/x64 SSA, partial semantics"}, {"debugger", "Windows explicit launch/attach; host and bitness limits apply"},
-        {"commands", QJsonArray{"analyze", "inspect", "functions", "xrefs", "strings", "decompile", "abi-observe", "type-observe", "hir-observe", "ir-audit", "cfg-structure", "structuring-plan", "call-graph", "effects-observe", "ir", "symbols", "diff", "diff-functions", "patch", "emulate", "debug", "plugins", "plugin-run", "benchmark"}}, {"runtime_validated", false}};
+        {"commands", QJsonArray{"analyze", "inspect", "functions", "xrefs", "strings", "decompile", "abi-observe", "type-observe", "hir-observe", "ir-audit", "phi-transfers", "phi-copy-plan", "edge-effects", "control-safety", "cfg-structure", "structuring-plan", "call-graph", "effects-observe", "ir", "symbols", "diff", "diff-functions", "patch", "emulate", "debug", "plugins", "plugin-run", "benchmark"}}, {"runtime_validated", false}};
     if (command == QStringLiteral("benchmark")) return benchmark_corpus(context.request);
     if (command == QStringLiteral("plugins")) return {{"extensions", discover_extensions(context.text("input"))}};
     if (command == QStringLiteral("plugin-run")) return invoke_extension(context.text("input"), context.text("sha256"), context.text("command"), context.request.value("arguments").toObject(), context.parser.isSet("allow-plugin"));
@@ -1004,7 +1331,7 @@ QJsonObject execute(const QString& command, Context& context) {
         QJsonArray warnings; for (const auto& warning : enriched.warnings) warnings.append(warning);
         return {{"format", format_name(metadata.format)}, {"architecture", architecture_name(metadata.architecture)}, {"size", hex(metadata.size)}, {"details", enriched.details}, {"abi_hint", abi_hint_json(metadata)}, {"warnings", warnings}};
     }
-    static const QStringList analysis_commands{"analyze", "functions", "xrefs", "strings", "decompile", "abi-observe", "type-observe", "hir-observe", "ir-audit", "cfg-structure", "structuring-plan", "call-graph", "effects-observe", "ir", "symbols", "emulate", "diff-functions"};
+    static const QStringList analysis_commands{"analyze", "functions", "xrefs", "strings", "decompile", "abi-observe", "type-observe", "hir-observe", "ir-audit", "phi-transfers", "phi-copy-plan", "edge-effects", "control-safety", "cfg-structure", "structuring-plan", "call-graph", "effects-observe", "ir", "symbols", "emulate", "diff-functions"};
     if (!analysis_commands.contains(command)) fail("Comando desconhecido; consulte --help.");
     context.load();
     const auto& snapshot = *context.snapshot;
@@ -1026,13 +1353,43 @@ QJsonObject execute(const QString& command, Context& context) {
     }
     if (command == QStringLiteral("hir-observe")
         || command == QStringLiteral("ir-audit")
+        || command == QStringLiteral("phi-transfers")
+        || command == QStringLiteral("phi-copy-plan")
+        || command == QStringLiteral("edge-effects")
+        || command == QStringLiteral("control-safety")
         || command == QStringLiteral("cfg-structure")
         || command == QStringLiteral("structuring-plan")) {
         const auto hir = observe_function_hir(snapshot, context.function_index());
         if (command == QStringLiteral("ir-audit"))
             return { { "ir_semantic_audit", ir_semantic_audit_json(hir.ir_audit) },
                      { "hir_partial", hir.partial } };
+        if (command == QStringLiteral("phi-transfers")
+            || command == QStringLiteral("phi-copy-plan")
+            || command == QStringLiteral("edge-effects")) {
+            const auto transfers = observe_hir_phi_transfers(hir);
+            if (command == QStringLiteral("phi-transfers"))
+                return { { "phi_transfers", phi_transfers_json(transfers) },
+                         { "hir_version", hir.version },
+                         { "hir_partial", hir.partial } };
+            const auto copies = plan_parallel_phi_copies(transfers);
+            if (command == QStringLiteral("edge-effects"))
+                return { { "edge_effects", edge_effects_json(
+                            observe_hir_edge_effects(hir, copies)) },
+                         { "hir_version", hir.version },
+                         { "hir_partial", hir.partial } };
+            return { { "phi_copy_plan", parallel_copy_plan_json(copies) },
+                     { "hir_version", hir.version },
+                     { "hir_partial", hir.partial } };
+        }
         const auto regions = observe_hir_control_regions(hir);
+        if (command == QStringLiteral("control-safety")) {
+            const auto transfers = observe_hir_phi_transfers(hir);
+            const auto copies = plan_parallel_phi_copies(transfers);
+            const auto edges = observe_hir_edge_effects(hir, copies);
+            return { { "control_safety",
+                control_safety_json(observe_hir_control_safety(hir, edges)) },
+                { "hir_version", hir.version }, { "hir_partial", hir.partial } };
+        }
         if (command == QStringLiteral("cfg-structure"))
             return { { "control_regions", control_regions_json(regions) },
                      { "hir_version", hir.version },
@@ -1042,8 +1399,16 @@ QJsonObject execute(const QString& command, Context& context) {
             return { { "structuring_plan", structuring_plan_json(plan) },
                      { "hir_version", hir.version },
                      { "hir_partial", hir.partial } };
+        const auto transfers = observe_hir_phi_transfers(hir);
+        const auto copies = plan_parallel_phi_copies(transfers);
+        const auto edge_effects = observe_hir_edge_effects(hir, copies);
         return { { "hir", hir_json(hir) },
                  { "control_regions", control_regions_json(regions) },
+                 { "phi_transfers", phi_transfers_json(transfers) },
+                 { "phi_copy_plan", parallel_copy_plan_json(copies) },
+                 { "edge_effects", edge_effects_json(edge_effects) },
+                 { "control_safety", control_safety_json(
+                     observe_hir_control_safety(hir, edge_effects)) },
                  { "structuring_plan", structuring_plan_json(plan) } };
     }
     if (command == QStringLiteral("type-observe")) {
@@ -1104,7 +1469,7 @@ QJsonObject execute(const QString& command, Context& context) {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv); QCoreApplication::setApplicationName(QStringLiteral("reworkbench-cli")); QCoreApplication::setApplicationVersion(QStringLiteral("0.3.0"));
-    QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("Automação nativa de engenharia reversa. Comandos: capabilities, inspect, analyze, functions, xrefs, strings, symbols, decompile, abi-observe, type-observe, hir-observe, ir-audit, cfg-structure, structuring-plan, call-graph, effects-observe, ir, diff, diff-functions, patch, emulate, debug, plugins, plugin-run, benchmark."));
+    QCommandLineParser parser; parser.setApplicationDescription(QStringLiteral("Automação nativa de engenharia reversa. Comandos: capabilities, inspect, analyze, functions, xrefs, strings, symbols, decompile, abi-observe, type-observe, hir-observe, ir-audit, phi-transfers, phi-copy-plan, edge-effects, control-safety, cfg-structure, structuring-plan, call-graph, effects-observe, ir, diff, diff-functions, patch, emulate, debug, plugins, plugin-run, benchmark."));
     parser.addHelpOption(); parser.addVersionOption(); parser.addPositionalArgument("command", "Comando nativo");
     for (const auto* key : {"request", "input", "other", "output", "project", "analysis", "function", "abi", "arch", "base", "entry", "endian", "slice", "offset", "count", "symbols", "sha256", "command"})
         parser.addOption(QCommandLineOption(QString::fromLatin1(key), QStringLiteral("Parâmetro %1; endereços em hexadecimal, caminhos locais").arg(QString::fromLatin1(key)), "value"));

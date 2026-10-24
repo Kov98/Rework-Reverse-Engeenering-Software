@@ -24,7 +24,9 @@ add_library(reworkbench_native STATIC
     src/interprocedural.cpp src/effect_summary.cpp src/region_effect_analysis.cpp
     src/type_evidence_analysis.cpp src/hir_analysis.cpp
     src/control_region_analysis.cpp src/structuring_plan.cpp
-    src/ir_semantic_audit.cpp
+    src/ir_semantic_audit.cpp src/phi_transfers.cpp
+    src/parallel_copy_plan.cpp src/edge_effect_analysis.cpp
+    src/control_safety_analysis.cpp
     src/call_effects.cpp src/decompilation_cache.cpp
     src/investigation_files.cpp src/investigation_emulator.cpp
     src/debugger.cpp src/plugin.cpp src/benchmark.cpp

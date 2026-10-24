@@ -240,9 +240,30 @@ public:
         return adapt(result, program_.register_width);
     }
 
-    std::optional<Value> read(const Operand& operand, int width, const Instruction& instruction) {
+    // x86 arithmetic and PUSH sign-extend a narrower encoded immediate.
+    // MOV does not generally do this (except MOV r/m64, imm32), so the
+    // caller must explicitly select the architectural sign-extension rule.
+    std::optional<Value> read(const Operand& operand, int width,
+                              const Instruction& instruction,
+                              bool sign_extend_immediate = false) {
         if (!scalar_width(width)) return std::nullopt;
-        if (operand.kind == OperandKind::Immediate) return constant(operand.immediate, width);
+        if (operand.kind == OperandKind::Immediate) {
+            quint64 immediate = operand.immediate;
+            if (sign_extend_immediate) {
+                const int encoded_bits = operand.encoded_immediate_bits;
+                // Without verified encoding data there is no sound basis
+                // for interpreting the high bits of a narrow immediate.
+                // Fall back to the opaque instruction instead of guessing.
+                if (!scalar_width(encoded_bits) || encoded_bits > width)
+                    return std::nullopt;
+                if (encoded_bits < width) {
+                    const quint64 raw = immediate & mask(encoded_bits);
+                    const quint64 sign_bit = quint64(1) << (encoded_bits - 1);
+                    immediate = (raw & sign_bit) ? (raw | ~mask(encoded_bits)) : raw;
+                }
+            }
+            return constant(immediate, width);
+        }
         if (operand.kind == OperandKind::Register) {
             const auto reg = register_info(operand.reg, program_.architecture);
             if (!reg || reg->width != width || operand.width_bits != width) return std::nullopt;
@@ -392,8 +413,107 @@ public:
         }
         if (instruction.flow != FlowKind::Normal) return false;
         if (mnemonic == QStringLiteral("nop")) return true;
+        // These instructions change CF only; all other modeled flags
+        // remain untouched. Reject unexpected operands rather than
+        // inventing semantics for an unrecognized encoding.
+        if (operands.isEmpty()) {
+            if (mnemonic == QStringLiteral("clc")) {
+                set(QStringLiteral("CF"), constant(0, 1));
+                return true;
+            }
+            if (mnemonic == QStringLiteral("stc")) {
+                set(QStringLiteral("CF"), constant(1, 1));
+                return true;
+            }
+            if (mnemonic == QStringLiteral("cmc")) {
+                set(QStringLiteral("CF"), unary(
+                    Op::BooleanNot, state(QStringLiteral("CF")), 1));
+                return true;
+            }
+        }
+        // XCHG is safe to model only when BOTH operands are registers.
+        // Memory XCHG is implicitly atomic on x86, and lowering it to
+        // ordinary Load/Store would lose that critical guarantee.
+        if (mnemonic == QStringLiteral("xchg") && operands.size() == 2
+            && operands[0].kind == OperandKind::Register
+            && operands[1].kind == OperandKind::Register
+            && operands[0].width_bits == operands[1].width_bits
+            && writable(operands[0]) && writable(operands[1])) {
+            const int width = operands[0].width_bits;
+            const auto left = read(operands[0], width, instruction);
+            const auto right = read(operands[1], width, instruction);
+            if (!left || !right) return false;
+            // Snapshot both original values before either register write
+            // so overlapping subregisters retain the swap semantics.
+            return write(operands[0], *right, instruction)
+                && write(operands[1], *left, instruction);
+        }
+        // BSWAP reverses the order of bytes in a 32- or 64-bit
+        // register without changing flags. The 16-bit form is undefined;
+        // memory operands and operand-size override remain opaque.
+        if (mnemonic == QStringLiteral("bswap") && operands.size() == 1
+            && operands[0].kind == OperandKind::Register
+            && !pre.operand_override
+            && (operands[0].width_bits == 32 || operands[0].width_bits == 64)
+            && writable(operands[0])) {
+            const int width = operands[0].width_bits;
+            const auto original = read(operands[0], width, instruction);
+            if (!original) return false;
+            Value reversed = constant(0, width);
+            for (int offset = 0; offset < width; offset += 8) {
+                const Value byte_value = extract(*original, offset, 8);
+                const Value inserted = node(Op::Insert, bits(width),
+                                            { reversed, byte_value });
+                program_.nodes[inserted].bit_offset = width - 8 - offset;
+                reversed = inserted;
+            }
+            return write(operands[0], reversed, instruction);
+        }
+        // The accumulator sign-extension family does not touch flags.
+        // CBW: AL -> AX. CWDE: AX -> EAX. CDQE: EAX -> RAX (x64 only).
+        // Use the decoder's exact mnemonic to avoid guessing the variant
+        // from operand-size prefixes; no implicit memory effects exist.
+        if (operands.isEmpty()
+            && (mnemonic == QStringLiteral("cbw")
+                || mnemonic == QStringLiteral("cwde")
+                || mnemonic == QStringLiteral("cdqe"))) {
+            if (mnemonic == QStringLiteral("cdqe")
+                && program_.architecture != Architecture::X64)
+                return false;
+            const QString source_name =
+                mnemonic == QStringLiteral("cbw") ? QStringLiteral("al")
+                : mnemonic == QStringLiteral("cwde") ? QStringLiteral("ax")
+                : QStringLiteral("eax");
+            const QString destination_name =
+                mnemonic == QStringLiteral("cbw") ? QStringLiteral("ax")
+                : mnemonic == QStringLiteral("cwde") ? QStringLiteral("eax")
+                : QStringLiteral("rax");
+            const auto source_reg = register_info(source_name, program_.architecture);
+            const auto destination_reg = register_info(destination_name, program_.architecture);
+            if (!source_reg || !destination_reg
+                || source_reg->width >= destination_reg->width)
+                return false;
+            const Value widened = adapt(
+                read_register(*source_reg), destination_reg->width, true);
+            write_register(*destination_reg, widened);
+            return true;
+        }
         if ((mnemonic == QStringLiteral("mov") || mnemonic == QStringLiteral("movabs")) && operands.size() == 2 && writable(operands[0])) {
-            const auto source = read(operands[1], operands[0].width_bits, instruction);
+            // MOV r/m64, imm32 sign-extends; MOV r64, imm64 does not.
+            // The encoded width is authoritative, not x86_op.size.
+            const bool mov_imm64_destination =
+                mnemonic == QStringLiteral("mov")
+                && operands[0].width_bits == 64
+                && operands[1].kind == OperandKind::Immediate;
+            if (mov_imm64_destination
+                && operands[1].encoded_immediate_bits != 32
+                && operands[1].encoded_immediate_bits != 64)
+                return false; // Unknown encoding: preserve opaque fallback.
+            const bool sign_extended_mov_imm32 =
+                mov_imm64_destination
+                && operands[1].encoded_immediate_bits == 32;
+            const auto source = read(operands[1], operands[0].width_bits,
+                                     instruction, sign_extended_mov_imm32);
             return source && write(operands[0], *source, instruction);
         }
         if ((mnemonic == QStringLiteral("movzx") || mnemonic == QStringLiteral("movsx") || mnemonic == QStringLiteral("movsxd")) &&
@@ -443,7 +563,10 @@ public:
             const bool compare = mnemonic == QStringLiteral("cmp") || mnemonic == QStringLiteral("test");
             if (!compare && !writable(operands[0])) return false;
             const int width = operands[0].width_bits;
-            const auto left = read(operands[0], width, instruction), right = read(operands[1], width, instruction);
+            const auto left = read(operands[0], width, instruction);
+            // ADD/SUB/CMP/AND/OR/XOR/TEST with narrow immediate use the
+            // sign-extended value at the operand's effective width.
+            const auto right = read(operands[1], width, instruction, true);
             if (!left || !right) return false;
             const Op op = mnemonic == QStringLiteral("add") ? Op::Add :
                 (mnemonic == QStringLiteral("sub") || mnemonic == QStringLiteral("cmp")) ? Op::Subtract :
@@ -459,7 +582,10 @@ public:
         }
         if (mnemonic == QStringLiteral("push") && operands.size() == 1 && !pre.operand_override) {
             const int width = program_.register_width;
-            const auto source = read(operands[0], width, instruction);
+            // PUSH imm8/imm32 sign-extends to the stack operand width.
+            // The decoder's immediate may be reported as an unsigned
+            // bit-pattern; a plain zero extension would change the value.
+            const auto source = read(operands[0], width, instruction, true);
             if (!source) return false;
             const QString sp = width == 64 ? QStringLiteral("rsp") : QStringLiteral("esp");
             const auto next_sp = binary(Op::Subtract, state(sp), constant(static_cast<quint64>(width / 8), width), width);
@@ -522,8 +648,31 @@ public:
                 const auto& instruction = function.instructions[index];
                 current_address_ = instruction.address;
                 ++program_.total;
+                // A failed translator may already have emitted Load,
+                // arithmetic or address-expression nodes before a later
+                // operand proves unsupported. Never retain such speculative
+                // definitions alongside the conservative opaque fallback.
+                // Commit the entire instruction or roll its changes back.
+                const qsizetype nodes_before = program_.nodes.size();
+                const qsizetype definitions_before = block.definitions.size();
+                const QVector<Value> state_before = state_;
+                const Comparison comparison_before = comparison_;
+                const Terminator terminator_before = block.terminator;
+                const Value condition_before = block.condition;
+                const Value return_before = block.return_target;
                 if (translate(instruction)) ++program_.modeled;
                 else {
+                    program_.nodes.resize(nodes_before);
+                    block.definitions.resize(definitions_before);
+                    state_ = state_before;
+                    comparison_ = comparison_before;
+                    block.terminator = terminator_before;
+                    block.condition = condition_before;
+                    block.return_target = return_before;
+                    // An Extract memo may reference one of the discarded
+                    // node IDs. Clearing it is conservative and correct:
+                    // future reads will recreate any needed expression.
+                    extracts_.clear();
                     opaque(instruction, instruction.flow == FlowKind::Call ? QStringLiteral("ABI, callee and side effects unknown") : QStringLiteral("semantics not modeled"));
                     if (instruction.flow == FlowKind::Jump && !instruction.indirect_targets.isEmpty())
                         warn(program_, QStringLiteral("Recovered indirect-branch candidates remain opaque transfers; no switch index or first-target condition is invented."));

@@ -43,6 +43,18 @@ struct HirStructuringPlan {
     quint32 overlapping_candidate_blocks = 0;
     bool raw_cfg_preserved = true;
     bool ir_structural_checks_passed = false;
+    bool phi_edge_associations_complete = false;
+    quint32 phi_parallel_dependency_edges = 0;
+    quint32 phi_copy_cycle_edges = 0;
+    bool phi_copy_schedule_structurally_consistent = false;
+    quint32 phi_virtual_temporaries_planned = 0;
+    quint32 phi_symbolic_state_transfers = 0;
+    bool edge_effect_contracts_accounted_for = false;
+    quint32 edge_effects_unresolved = 0;
+    bool control_edges_accounted_for = false;
+    quint32 critical_edges_detected = 0;
+    quint32 possible_nonreturning_call_blocks = 0;
+    quint32 unresolved_control_terminators = 0;
     QStringList unproved_rewrite_obligations;
     bool emitted_source_code = false;
     bool rewrite_authorized = false;

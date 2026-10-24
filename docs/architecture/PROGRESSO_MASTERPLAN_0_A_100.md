@@ -1,44 +1,63 @@
 # REWORK — PROGRESSO DO PLANO MESTRE (0–100%)
 
-**Checkpoint:** 014 — 2026-10-23
-**Progresso global estimado: 14/100 = 14% (PROVISÓRIO).** Anterior 13%.
-Esta porcentagem é avaliação editorial do escopo escrito, não medição de paridade Ghidra. Etapas 002–014 SEM compilação, testes ou benchmarks conjuntos; créditos podem regredir na auditoria futura.
+**Checkpoint 035 — 24/10/2026. Progresso editorial estimado: 35/100 = 35%, PROVISÓRIO.** Antes: 34%.
+Não é paridade demonstrada com Ghidra, build funcional ou taxa de testes aprovados. As etapas 002–035 seguem sem compilação e regressões conjuntas; o crédito poderá ser revisto.
 
-## Rubrica 100 pontos
+## Rubrica
 
-| Área | Peso | Crédito editorial |
+| Subsistema | Peso | Crédito provisório |
 |---|---:|---:|
-| Ingestão binária, ferramentas e análise | 8 | 4 |
-| Lifter ISA e semântica MIR correta | 16 | 1 |
-| CFG/SSA, pilha, memória e aliasing | 14 | 2,5 |
-| ABI, chamadas, assinatura, interprocedural | 12 | 2,5 |
+| Ingestão de binários, ferramentas e preparação de corpus | 8 | 5 |
+| Semântica ISA, lifter e IR de máquina | 16 | 12 |
+| CFG/SSA, stack, MemorySSA, alias, controle e arestas | 14 | 11,5 |
+| ABI, chamadas, assinaturas e interprocedural | 12 | 2,5 |
 | HIR, estruturação e emissão C | 17 | 3 |
-| Tipos, estruturas, objetos C++ | 11 | 1 |
-| Demais ISAs e ABIs | 7 | 0 |
-| Frontends JVM/CIL/.NET/JS | 7 | 0 |
+| Tipos, objetos, structs e C++ | 11 | 1 |
+| Outras ISAs e ABIs | 7 | 0 |
+| Frontends JVM, CIL/.NET e JavaScript | 7 | 0 |
 | Emissores multilíngues | 4 | 0 |
-| Segurança, testes, benchmark e paridade demonstrada | 4 | 0 |
-| **TOTAL** | **100** | **14** |
+| Qualidade comprovada, testes, benchmarks e paridade Ghidra | 4 | 0 |
+| **Total** | **100** | **35** |
 
-O crédito de 3/17 em HIR refere-se a esqueleto estrutural, fatos de dominância e planejamento de regiões, todos **não validados**. Não há emissor C nem AST C fiel.
+O crédito da etapa 035 é apenas editorial pela modelagem estática de CBW, CWDE e CDQE com extensão do acumulador na IR existente. Não representa testes aprovados ou paridade medida.
 
-## Marcos de evidência
+## Evidências e limites
 
-- Etapa 001: ABI Win64/SysV compilada anteriormente, 25 testes CLI aprovados e 2 pulados.
-- Etapas 002–011: observadores de ABI, stack, memória e tipos, código escrito, **NÃO compilado**.
-- Etapa 012: HIR v0 estrutural read-only, `hir-observe`, **NÃO compilada**.
-- Etapa 013: dominadores, pós-dominadores, laços naturais, candidatos de junção/irredutibilidade, `cfg-structure`, **NÃO compilada**.
-- **Etapa 014:** `structuring_plan.cpp/.hpp` com candidatos de regiões para laço/diamante, bloqueadores, fallback original de todos os blocos e contadores de cobertura e conflito. CLI `structuring-plan`, campo adicional em `hir-observe`, alteração CMake. **CÓDIGO SALVO E NÃO COMPILADO/NEM TESTADO.**
+- Etapa 001: candidatos ABI Win64/SysV, último build/teste CLI conhecido com 25 testes aprovados, 2 pulados, ANTES das etapas seguintes.
+- Etapas 002–014: observadores de ABI/memória/tipos, HIR e planejador estrutural, somente código escrito.
+- Etapa 015: hardening de invariantes SSA/Phi/memória, só código escrito.
+- Etapa 016: inputs Phi por aresta, código escrito.
+- Etapa 017: plano simbólico de cópias paralelas e snapshots, código escrito.
+- Etapa 018: contratos de fronteira e efeitos, código escrito.
+- Etapa 019: normalização observacional de terminadores, critical edges e riscos noreturn/exception, código escrito.
+- **Etapa 020:** inventário estático (59 caminhos CMake existentes nesse recorte, includes locais inspecionados, nomes de comandos no CLI), fixtures C, script de inventário NÃO executado e matriz de validação. NÃO compilada/testada.
+- **Etapa 021:** segurança de terminadores, bloqueio de transformações e auditoria de nós ausentes. Código escrito, sem build/teste.
+- **Etapa 022:** auditoria de tipos/larguras/operações e ID/dono de Phi. Código escrito sem build/teste.
+- **Etapa 023:** contratos da sequência `Opaque/CallOpaque -> StateField(mem)`; escrito e não testado.
+- **Etapa 024:** integridade das projeções `StateField` para todos os slots opacos; não testada.
+- **Etapa 025:** dominância dos valores `Block.output` e entradas globais SSA; escrita e não validada.
+- **Etapa 026:** invariantes de condições, retornos e dominância dos terminadores. Código escrito, sem build/teste.
+- **Etapa 027:** coerência entre índices/endereço de bloco, arestas e destinos `taken/not_taken`, escrito e não testado.
+- **Etapa 028:** alcançabilidade a partir da entrada, flags e mapa de blocos conferidos, código escrito e não testado.
+- **Etapa 029:** partição das referências de instruções por blocos CFG, sem duplicatas e coerente com contagem do lifter, escrita e não testada.
+- **Etapa 030:** rollback atômico do lifter em tradução malsucedida; código escrito e não testado.
+- **Etapa 031:** extensão com sinal de imediatos conforme fonte lógica (substituída e refinada na 032), não testada.
+- **Etapa 032:** largura codificada real de imediato no decoder/lifter x86/x64; código escrito, não testado.
+- **Etapa 033:** modelagem de CLC/STC/CMC e XCHG entre registradores, escrita e não testada.
+- **Etapa 034:** BSWAP 32/64 bits usando Extract e Insert, código escrito e não testado.
+- **Etapa 035:** modelagem de CBW (AL→AX), CWDE (AX→EAX) e CDQE (EAX→RAX, somente x64), por SignExtend, preservação de flags e escrita de subregistradores. Código escrito, **sem compilação, testes, commit ou push**; relatório `IMPLEMENTACAO_035_X86_ACCUMULATOR_SIGN_EXTENSION_2026-10-24.md`.
 
-## Principais limitações
+## Falhas e lacunas ainda possíveis
 
-Sem equivalência demonstrada com Ghidra, sem semântica correta e completa de ISAs, chamadas/ABI incompletas, aliasing e MemorySSA em grande parte observacionais, sem tipos-fonte recuperados, sem HIR reestruturada, sem saída C/C++ validada, sem JVM/.NET/JS e outras ISAs/frontend/emissores confiáveis. Propostas `structurally_eligible` não autorizam reescrever CFG; `rewrite_authorized=false` em todos os casos.
+Sem paridade Ghidra comprovada, sem compilação/integração dos incrementos 002–035, sem IR semanticamente confiável para todas as ISAs/chamadas/ABIs, sem tratamento completo de exceções e saltos indiretos, sem HIR C/C++ reescrita, classes/assinaturas recuperadas ou emissores multilíngues.
+Um resultado positivo de inventário **não** valida símbolos, assinaturas, dependências transitivas, compilação C++20/Qt, link ou runtime.
 
-## Próximo marco 015
+## Próximo marco 036
 
-Priorizar engenharia semântica do núcleo (ordem SSA, PHI, Store/Load, efeitos de chamadas) e desenvolver contrato explícito de proof obligations para transformação segura de HIR, preservando fallback. Não inventar conclusão de pureza ou estrutura-fonte.
+Prioridade: obter autorização para **compilação e testes controlados** das etapas acumuladas e corrigir as falhas concretas. Se não houver autorização, apenas revisar código por inspeção estática e aperfeiçoar o corpus/contratos; não alegar testado ou compatível com Ghidra.
 
-## Continuidade
+## Git e retomada
 
-Ler `REWORK_CHECKPOINT.md` e `docs/architecture/IMPLEMENTACAO_014_STRUCTURING_PLAN_2026-10-23.md` no worktree `feat/reworkbench`.
-**Ordem do usuário: NÃO compilar, rodar testes, benchmarkar ou commitar até ele liberar.**
+Branch local `main`, pasta principal `C:\Users\pedri\OneDrive\Documents\PROJETO\Rework Reverse Engeenering Software`. Último commit GitHub main `5795874`. Edições 015–035 integram o lote Git desta entrega. Confirmar o estado real do remoto com `git status --short --branch` e `git log -1`; continuam não compiladas/testadas.
+Ler `REWORK_CHECKPOINT.md` e `docs/architecture/IMPLEMENTACAO_035_X86_ACCUMULATOR_SIGN_EXTENSION_2026-10-24.md`.
+**Instrução do usuário: não compilar, rodar testes/benchmarks nem commitar automaticamente.**

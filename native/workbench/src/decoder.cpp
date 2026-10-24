@@ -107,6 +107,17 @@ void decode_x86(csh handle, const cs_insn& native, Instruction& out, Architectur
         } else if (source.type == X86_OP_IMM) {
             operand.kind = OperandKind::Immediate;
             operand.immediate = static_cast<quint64>(source.imm);
+            // Capstone x86_op.size describes the logical operand width,
+            // not necessarily the bytes encoded by an imm8/imm32 form.
+            // Never infer sign extension from that logical width.
+            const int encoded_offset = int(detail.encoding.imm_offset);
+            const int encoded_size = int(detail.encoding.imm_size);
+            const int available = out.bytes.size();
+            if (encoded_size >= 1 && encoded_size <= 8
+                && encoded_offset > 0 && encoded_offset <= available
+                && encoded_size <= available - encoded_offset) {
+                operand.encoded_immediate_bits = encoded_size * 8;
+            }
         } else if (source.type == X86_OP_MEM) {
             operand.kind = OperandKind::Memory;
             operand.memory_base = register_name(handle, source.mem.base);
