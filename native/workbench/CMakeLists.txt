@@ -13,11 +13,19 @@ endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Concurrent Sql)
 qt_standard_project_setup()
 add_library(reworkbench_native STATIC
-    src/types.cpp src/binary_image.cpp src/loaders.cpp
+    src/types.cpp src/abi.cpp src/binary_image.cpp src/loaders.cpp
     src/decoder.cpp src/analysis.cpp src/ir.cpp
     src/project.cpp src/serialization.cpp
     src/flow_recovery.cpp src/enrichment.cpp src/debug_symbols.cpp
-    src/decompiler.cpp src/decompiler_lift.cpp src/decompilation_cache.cpp
+    src/decompiler.cpp src/decompiler_lift.cpp src/function_abi.cpp
+    src/stack_abi_observation.cpp src/stack_frame_analysis.cpp
+    src/stack_value_flow_analysis.cpp src/memory_dependence.cpp
+    src/memory_ssa_analysis.cpp src/memory_region_analysis.cpp
+    src/interprocedural.cpp src/effect_summary.cpp src/region_effect_analysis.cpp
+    src/type_evidence_analysis.cpp src/hir_analysis.cpp
+    src/control_region_analysis.cpp src/structuring_plan.cpp
+    src/ir_semantic_audit.cpp
+    src/call_effects.cpp src/decompilation_cache.cpp
     src/investigation_files.cpp src/investigation_emulator.cpp
     src/debugger.cpp src/plugin.cpp src/benchmark.cpp
 )

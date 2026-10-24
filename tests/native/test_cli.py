@@ -235,3 +235,52 @@ def test_trusted_example_extension_obeys_hash_and_opt_in():
 def test_list_rejects_negative_count(raw_project):
     _, project, _ = raw_project
     invoke("functions", "--project", project, "--count", "-1", success=False)
+
+
+
+def test_abi_hint_windows_x64_pe():
+    hint = invoke("inspect", "--input", FIXTURES / "pe64.exe")["abi_hint"]
+    assert hint["status"] == "candidate_from_file_format"
+    assert hint["verified_for_function"] is False
+    assert hint["id"] == "windows-x64"
+    assert hint["integer_args"] == ["rcx", "rdx", "r8", "r9"]
+    assert hint["vector_args"] == ["xmm0", "xmm1", "xmm2", "xmm3"]
+    assert hint["entry_rsp_first_stack_arg_offset"] == 40
+    assert hint["shadow_space_bytes"] == 32
+    assert hint["red_zone_bytes"] == 0
+    assert "rdi" in hint["callee_saved_gprs"]
+    assert "rsi" in hint["callee_saved_gprs"]
+    assert "xmm6" in hint["callee_saved_vector_registers"]
+    assert hint["vector_args_follow_position"] is True
+
+
+def test_abi_hint_system_v_elf_x64(tmp_path):
+    # Preserve a valid self-authored ELF fixture's layout; change only e_machine.
+    # The test inspects metadata and never executes the fixture as x86-64 code.
+    elf = bytearray((FIXTURES / "aarch64.elf").read_bytes())
+    assert elf[:4] == bytes([0x7F, 0x45, 0x4C, 0x46])
+    assert elf[4] == 2 and elf[5] == 1  # ELF64 little endian
+    elf[18:20] = (62).to_bytes(2, "little")  # EM_X86_64
+    target = tmp_path / "abi-x64.elf"
+    target.write_bytes(elf)
+    hint = invoke("inspect", "--input", target)["abi_hint"]
+    assert hint["id"] == "sysv-amd64"
+    assert hint["status"] == "candidate_from_file_format"
+    assert hint["verified_for_function"] is False
+    assert hint["integer_args"] == ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+    assert hint["entry_rsp_first_stack_arg_offset"] == 8
+    assert hint["red_zone_bytes"] == 128
+    assert hint["shadow_space_bytes"] == 0
+    assert "rdi" in hint["caller_saved_gprs"]
+    assert "rdi" not in hint["callee_saved_gprs"]
+    assert hint["vector_args_follow_position"] is False
+
+
+def test_abi_is_not_guessed_for_unrelated_formats(tmp_path):
+    assert invoke("inspect", "--input", FIXTURES / "pe32.exe")["abi_hint"]["status"] == "unknown"
+    assert invoke("inspect", "--input", FIXTURES / "macho_x86_64")["abi_hint"]["status"] == "unknown"
+    raw = tmp_path / "no-platform.bin"
+    raw.write_bytes(bytes.fromhex("b82a000000c3"))
+    hint = invoke("inspect", "--input", raw, "--raw", "--arch", "x86-64",
+                  "--base", "0x1000", "--entry", "0x1000")["abi_hint"]
+    assert hint["status"] == "unknown"

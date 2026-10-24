@@ -21,7 +21,7 @@ struct Type {
 };
 
 enum class Op {
-    Input, Constant, Phi, Undefined, Opaque, StateField,
+    Input, Constant, Phi, Undefined, Opaque, CallOpaque, StateField,
     Extract, Insert, ZeroExtend, SignExtend,
     Add, Subtract, Multiply, And, Or, Xor, Not,
     Equal, UnsignedLess, SignedLess, BooleanNot, Select, Parity,

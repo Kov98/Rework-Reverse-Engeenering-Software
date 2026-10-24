@@ -356,7 +356,9 @@ private:
         case Op::Undefined:
             return QStringLiteral("undefined_%1(%2%3)").arg(type_name(node.type), escaped(node.text),
                 node.operands.isEmpty() ? QString{} : QStringLiteral(", ") + operand(0));
-        case Op::Opaque: return QStringLiteral("opaque_instruction(%1, %2, %3)").arg(escaped(node.address.text()), escaped(node.text), pack(node.operands));
+        case Op::Opaque:
+        case Op::CallOpaque:
+            return QStringLiteral("opaque_instruction(%1, %2, %3)").arg(escaped(node.address.text()), escaped(node.text), pack(node.operands));
         case Op::StateField: return QStringLiteral("%1.%2").arg(operand(0), node.text);
         case Op::Extract: return QStringLiteral("extract_u%1(%2, %3)").arg(node.type.bits).arg(operand(0)).arg(node.bit_offset);
         case Op::Insert: return QStringLiteral("insert_u%1(%2, %3, %4, %5)").arg(node.type.bits).arg(operand(0), operand(1)).arg(node.bit_offset).arg(program_.nodes[node.operands[1]].type.bits);

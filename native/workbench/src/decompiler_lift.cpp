@@ -171,7 +171,14 @@ public:
     Value extract(Value value, int offset, int width) {
         const QString key = QStringLiteral("%1:%2:%3").arg(value).arg(offset).arg(width);
         const auto existing = extracts_.constFind(key);
-        if (existing != extracts_.cend()) return *existing;
+        // Never reuse a definition owned by another basic block: doing so
+        // may introduce a use not dominated by its original definition.
+        // Within a block, the first extraction already precedes later uses.
+        // Cross-block common-subexpression elimination requires a separate
+        // dominance-aware pass after the CFG and SSA are finalized.
+        if (existing != extracts_.cend()
+            && program_.nodes[*existing].block == current_block_)
+            return *existing;
         const auto id = unary(Op::Extract, value, width);
         program_.nodes[id].bit_offset = offset;
         extracts_.insert(key, id);
@@ -345,7 +352,8 @@ public:
 
     void opaque(const Instruction& instruction, const QString& reason) {
         comparison_.valid = false;
-        const auto effect = node(Op::Opaque, { TypeKind::OpaqueState, 0 }, state_,
+        const auto effect = node(instruction.flow == FlowKind::Call ? Op::CallOpaque : Op::Opaque,
+            { TypeKind::OpaqueState, 0 }, state_,
             instruction.mnemonic.left(64) + QLatin1Char(' ') + instruction.operands_text.left(512) + QStringLiteral(" | ") + reason);
         for (qsizetype i = 0; i < program_.state_slots.size(); ++i)
             state_[i] = node(Op::StateField, program_.state_slots[i].type, { effect }, program_.state_slots[i].name);
