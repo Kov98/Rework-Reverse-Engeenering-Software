@@ -48,24 +48,33 @@ QString function_name(const Function& function) {
 class Writer {
 public:
     explicit Writer(quint32 limit) : limit_(limit) {}
-    void line(const QString& value = {}) {
+    void line(const QString& value = {}, const std::optional<Address>& source = {}) {
         if (truncated_) return;
         if (value.size() + 1 > limit_ - text_.size()) { truncated_ = true; return; }
+        if (source) addresses_.insert(lines_, *source);
         text_ += value;
         text_ += QLatin1Char('\n');
+        lines_ += int(value.count(QLatin1Char('\n'))) + 1;
     }
     QString take() {
         if (truncated_) {
             const QString marker = QStringLiteral("\n/* OUTPUT LIMIT: remaining text omitted; this listing is incomplete. */\n");
             const qsizetype retained = std::max(qsizetype(0), qsizetype(limit_) - marker.size());
             if (text_.size() > retained) text_.truncate(retained);
+            // The retained prefix may end halfway through a previously written
+            // instruction line. Only complete original lines retain their origin.
+            auto cut = addresses_.lowerBound(int(text_.count(QLatin1Char('\n'))));
+            while (cut != addresses_.end()) cut = addresses_.erase(cut);
             text_ += marker;
         }
         return std::move(text_);
     }
     bool truncated() const { return truncated_; }
+    const QMap<int, Address>& addresses() const { return addresses_; }
 private:
     QString text_;
+    QMap<int, Address> addresses_;
+    int lines_ = 0;
     qsizetype limit_;
     bool truncated_ = false;
 };
@@ -300,6 +309,8 @@ public:
 
     QString code() { return code_.take(); }
     QString ssa() { return ssa_.take(); }
+    const QMap<int, Address>& code_addresses() const { return code_.addresses(); }
+    const QMap<int, Address>& ssa_addresses() const { return ssa_.addresses(); }
     bool truncated() const { return code_.truncated() || ssa_.truncated(); }
 
 private:
@@ -324,7 +335,7 @@ private:
     QString pack(const QVector<Value>& values) const {
         QStringList fields;
         for (qsizetype i = 0; i < values.size(); ++i)
-            fields << QStringLiteral(".%1 = %2").arg(program_.slots[i].name, name(values[i]));
+            fields << QStringLiteral(".%1 = %2").arg(program_.state_slots[i].name, name(values[i]));
         return QStringLiteral("state{ ") + fields.join(QStringLiteral(", ")) + QStringLiteral(" }");
     }
     QString expression(Value value, int inline_depth = 0) const {
@@ -345,7 +356,9 @@ private:
         case Op::Undefined:
             return QStringLiteral("undefined_%1(%2%3)").arg(type_name(node.type), escaped(node.text),
                 node.operands.isEmpty() ? QString{} : QStringLiteral(", ") + operand(0));
-        case Op::Opaque: return QStringLiteral("opaque_instruction(%1, %2, %3)").arg(escaped(node.address.text()), escaped(node.text), pack(node.operands));
+        case Op::Opaque:
+        case Op::CallOpaque:
+            return QStringLiteral("opaque_instruction(%1, %2, %3)").arg(escaped(node.address.text()), escaped(node.text), pack(node.operands));
         case Op::StateField: return QStringLiteral("%1.%2").arg(operand(0), node.text);
         case Op::Extract: return QStringLiteral("extract_u%1(%2, %3)").arg(node.type.bits).arg(operand(0)).arg(node.bit_offset);
         case Op::Insert: return QStringLiteral("insert_u%1(%2, %3, %4, %5)").arg(node.type.bits).arg(operand(0), operand(1)).arg(node.bit_offset).arg(program_.nodes[node.operands[1]].type.bits);
@@ -415,41 +428,53 @@ private:
         for (const auto instruction_index : block.instructions) {
             check_cancelled(stop_);
             const auto& instruction = function_.instructions[instruction_index];
-            code_.line(indent + QStringLiteral("/* %1: %2 %3 */").arg(instruction.address.text(), comment(instruction.mnemonic), comment(instruction.operands_text)));
+            code_.line(indent + QStringLiteral("/* %1: %2 %3 */").arg(instruction.address.text(), comment(instruction.mnemonic), comment(instruction.operands_text)), instruction.address);
             while (at < block.definitions.size() && program_.nodes[block.definitions[at]].address == instruction.address) {
                 const auto value = block.definitions[at++];
                 if (!live_[value] || resolve(flow_.alias, value) != value || constant(value)) continue;
-                code_.line(indent + name(value) + QStringLiteral(" = ") + expression(value) + QLatin1Char(';'));
+                code_.line(indent + name(value) + QStringLiteral(" = ") + expression(value) + QLatin1Char(';'), instruction.address);
             }
         }
     }
+    std::optional<Address> control_source(qsizetype index) const {
+        const auto& block = program_.blocks[index];
+        if (block.instructions.isEmpty()) return {};
+        const auto& instruction = function_.instructions[block.instructions.back()];
+        // A normal fallthrough or unresolved end is synthesized by CFG recovery.
+        // Explicit machine control is attributable to this final instruction.
+        if (instruction.flow == FlowKind::Jump || instruction.flow == FlowKind::ConditionalJump ||
+            instruction.flow == FlowKind::Return || instruction.flow == FlowKind::Trap) return instruction.address;
+        return {};
+    }
     void edge(qsizetype from, const std::optional<Address>& address, const QString& indent) {
         const auto target = target_index(address);
+        const auto source = control_source(from);
         if (target >= 0) {
             transfer(from, target, indent);
-            code_.line(indent + QStringLiteral("goto %1;").arg(label(target)));
+            code_.line(indent + QStringLiteral("goto %1;").arg(label(target)), source);
         } else if (address) {
-            code_.line(indent + QStringLiteral("return transfer_to(%1, %2); /* outside recovered body */").arg(escaped(address->text()), pack(program_.blocks[from].output)));
+            code_.line(indent + QStringLiteral("return transfer_to(%1, %2); /* outside recovered body */").arg(escaped(address->text()), pack(program_.blocks[from].output)), source);
         } else {
-            code_.line(indent + QStringLiteral("return unresolved_control(%1, %2);").arg(escaped(program_.blocks[from].address.text()), pack(program_.blocks[from].output)));
+            code_.line(indent + QStringLiteral("return unresolved_control(%1, %2);").arg(escaped(program_.blocks[from].address.text()), pack(program_.blocks[from].output)), source);
         }
     }
     void terminator(qsizetype index, const QString& indent) {
         const auto& block = program_.blocks[index];
+        const auto source = control_source(index);
         switch (block.terminator) {
         case Terminator::Conditional:
-            code_.line(indent + QStringLiteral("if (%1) {").arg(condition(block.condition)));
+            code_.line(indent + QStringLiteral("if (%1) {").arg(condition(block.condition)), source);
             edge(index, block.taken, indent + QStringLiteral("    "));
-            code_.line(indent + QStringLiteral("} else {"));
+            code_.line(indent + QStringLiteral("} else {"), source);
             edge(index, block.not_taken, indent + QStringLiteral("    "));
             code_.line(indent + QLatin1Char('}'));
             break;
         case Terminator::Goto: edge(index, block.taken, indent); break;
         case Terminator::Return:
-            code_.line(indent + QStringLiteral("return machine_return(%1, %2);").arg(name(block.return_target), pack(block.output)));
+            code_.line(indent + QStringLiteral("return machine_return(%1, %2);").arg(name(block.return_target), pack(block.output)), source);
             break;
         default:
-            code_.line(indent + QStringLiteral("return unresolved_control(%1, %2);").arg(escaped(block.address.text()), pack(block.output)));
+            code_.line(indent + QStringLiteral("return unresolved_control(%1, %2);").arg(escaped(block.address.text()), pack(block.output)), source);
             break;
         }
     }
@@ -464,11 +489,11 @@ private:
         const bool taken_repeats = target_index(block.taken) == index;
         code_.line(QStringLiteral("    for (;;) { /* proven single-block loop */"));
         body(index, QStringLiteral("        "));
-        code_.line(QStringLiteral("        if (%1) {").arg(taken_repeats ? condition(block.condition) : QStringLiteral("!(%1)").arg(condition(block.condition))));
+        code_.line(QStringLiteral("        if (%1) {").arg(taken_repeats ? condition(block.condition) : QStringLiteral("!(%1)").arg(condition(block.condition))), control_source(index));
         transfer(index, index, QStringLiteral("            "));
-        code_.line(QStringLiteral("            continue;"));
+        code_.line(QStringLiteral("            continue;"), control_source(index));
         code_.line(QStringLiteral("        }"));
-        code_.line(QStringLiteral("        break;"));
+        code_.line(QStringLiteral("        break;"), control_source(index));
         code_.line(QStringLiteral("    }"));
         edge(index, taken_repeats ? block.not_taken : block.taken, QStringLiteral("    "));
     }
@@ -489,11 +514,11 @@ private:
         const auto join = target_index(a.taken);
         if (join < 0 || join != target_index(b.taken) || join == left || join == right || join == index) return false;
         body(index, QStringLiteral("    "));
-        code_.line(QStringLiteral("    if (%1) {").arg(condition(head.condition)));
+        code_.line(QStringLiteral("    if (%1) {").arg(condition(head.condition)), control_source(index));
         transfer(index, left, QStringLiteral("        "));
         body(left, QStringLiteral("        "));
         transfer(left, join, QStringLiteral("        "));
-        code_.line(QStringLiteral("    } else {"));
+        code_.line(QStringLiteral("    } else {"), control_source(index));
         transfer(index, right, QStringLiteral("        "));
         body(right, QStringLiteral("        "));
         transfer(right, join, QStringLiteral("        "));
@@ -525,16 +550,16 @@ private:
                 if (!live_[value] || resolve(flow_.alias, value) != value || program_.nodes[value].op == Op::Constant) continue;
                 if (constant(value)) {
                     ssa_.line(QStringLiteral("  ; v_%1 : %2 folded to %3 ; %4").arg(value)
-                        .arg(type_name(program_.nodes[value].type), name(value), program_.nodes[value].address.text()));
+                        .arg(type_name(program_.nodes[value].type), name(value), program_.nodes[value].address.text()), program_.nodes[value].address);
                     continue;
                 }
-                ssa_.line(QStringLiteral("  %1 : %2 = %3 ; %4").arg(name(value), type_name(program_.nodes[value].type), expression(value), program_.nodes[value].address.text()));
+                ssa_.line(QStringLiteral("  %1 : %2 = %3 ; %4").arg(name(value), type_name(program_.nodes[value].type), expression(value), program_.nodes[value].address.text()), program_.nodes[value].address);
             }
             if (block.terminator == Terminator::Conditional)
-                ssa_.line(QStringLiteral("  branch %1, %2, %3").arg(name(block.condition), block.taken ? block.taken->text() : QStringLiteral("unknown"), block.not_taken ? block.not_taken->text() : QStringLiteral("unknown")));
+                ssa_.line(QStringLiteral("  branch %1, %2, %3").arg(name(block.condition), block.taken ? block.taken->text() : QStringLiteral("unknown"), block.not_taken ? block.not_taken->text() : QStringLiteral("unknown")), control_source(b));
             else if (block.terminator == Terminator::Return)
-                ssa_.line(QStringLiteral("  machine_return %1, %2").arg(name(block.return_target), pack(block.output)));
-            else ssa_.line(QStringLiteral("  transfer %1, %2").arg(block.taken ? block.taken->text() : QStringLiteral("unknown"), pack(block.output)));
+                ssa_.line(QStringLiteral("  machine_return %1, %2").arg(name(block.return_target), pack(block.output)), control_source(b));
+            else ssa_.line(QStringLiteral("  transfer %1, %2").arg(block.taken ? block.taken->text() : QStringLiteral("unknown"), pack(block.output)), control_source(b));
         }
     }
 
@@ -561,13 +586,14 @@ DecompilationResult fallback(const Function& function, const DecompilationOption
         check_cancelled(stop);
         const auto& instruction = function.instructions[i];
         text.line(QStringLiteral("    opaque_instruction(%1, %2); /* all state/control unknown */")
-            .arg(escaped(instruction.address.text()), escaped(instruction.mnemonic + QLatin1Char(' ') + instruction.operands_text)));
+            .arg(escaped(instruction.address.text()), escaped(instruction.mnemonic + QLatin1Char(' ') + instruction.operands_text)), instruction.address);
     }
     if (count < function.instructions.size()) text.line(QStringLiteral("    /* instruction ceiling: further instructions omitted */"));
     text.line(QStringLiteral("}"));
     result.total_instructions = static_cast<quint32>(std::min(function.instructions.size(), qsizetype(std::numeric_limits<quint32>::max())));
     result.output_truncated = text.truncated() || count < function.instructions.size();
     result.pseudocode = text.take();
+    result.pseudocode_addresses = text.addresses();
     result.ssa_text = QStringLiteral("; Typed SSA is unavailable. ") + reason + QLatin1Char('\n');
     return result;
 }
@@ -600,6 +626,8 @@ DecompilationResult decompile_function(const AnalysisSnapshot& snapshot, qsizety
         result.output_truncated = renderer.truncated();
         result.pseudocode = renderer.code();
         result.ssa_text = renderer.ssa();
+        result.pseudocode_addresses = renderer.code_addresses();
+        result.ssa_addresses = renderer.ssa_addresses();
         if (result.output_truncated) result.warnings << QStringLiteral("Listing output ceiling reached; output is incomplete.");
         result.complete = !program.incomplete && !result.output_truncated && program.total > 0 &&
             program.modeled == program.total && program.total == result.total_instructions;

@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/brand">
+        <file>rework-logo.png</file>
+        <file>rework.ico</file>
+    </qresource>
+</RCC>

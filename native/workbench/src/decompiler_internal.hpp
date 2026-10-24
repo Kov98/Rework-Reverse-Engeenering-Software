@@ -21,7 +21,7 @@ struct Type {
 };
 
 enum class Op {
-    Input, Constant, Phi, Undefined, Opaque, StateField,
+    Input, Constant, Phi, Undefined, Opaque, CallOpaque, StateField,
     Extract, Insert, ZeroExtend, SignExtend,
     Add, Subtract, Multiply, And, Or, Xor, Not,
     Equal, UnsignedLess, SignedLess, BooleanNot, Select, Parity,
@@ -62,7 +62,7 @@ struct Block {
 struct Program {
     Architecture architecture = Architecture::Unknown;
     int register_width = 0;
-    QVector<Slot> slots;
+    QVector<Slot> state_slots;
     QMap<QString, qsizetype> slot_index;
     QVector<Node> nodes;
     QVector<Value> initial;

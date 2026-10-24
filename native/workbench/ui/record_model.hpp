@@ -5,7 +5,7 @@
 #include <QFutureWatcher>
 #include <QLabel>
 #include <QLineEdit>
-#include <QPushButton>
+#include <QToolButton>
 #include <QTableView>
 #include <QTimer>
 #include <QWidget>
@@ -20,6 +20,9 @@ struct Record {
     std::optional<Address> other_address;
     std::optional<quint64> file_offset;
     qsizetype function_index = -1;
+    bool assembly = false;
+    QStringList operand_registers{};
+    FlowKind flow = FlowKind::Normal;
 };
 struct Page {
     QVector<Record> rows;
@@ -50,7 +53,11 @@ public:
     void set_snapshot(std::shared_ptr<const AnalysisSnapshot> snapshot,
                       std::optional<qsizetype> function = {});
     void refresh();
+    void set_compact(bool compact);
+    void select_address(Address address);
+    void activate_current();
     std::function<void(const Record&, int)> activated;
+    std::function<void(const Record&)> selected;
     QTableView* view() const { return view_; }
 private:
     void request(quint64 offset);
@@ -61,9 +68,13 @@ private:
     QTableView* view_;
     QLineEdit* query_;
     QLabel* count_;
-    QPushButton* previous_;
-    QPushButton* next_;
+    QToolButton* previous_;
+    QToolButton* next_;
     QTimer* timer_;
+    QWidget* navigation_;
+    bool compact_ = false;
+    bool restoring_selection_ = false;
+    std::optional<Address> pending_address_;
     std::stop_source stop_;
     quint64 token_ = 0;
 };

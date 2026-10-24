@@ -13,11 +13,19 @@ endif()
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Concurrent Sql)
 qt_standard_project_setup()
 add_library(reworkbench_native STATIC
-    src/types.cpp src/binary_image.cpp src/loaders.cpp
+    src/types.cpp src/abi.cpp src/binary_image.cpp src/loaders.cpp
     src/decoder.cpp src/analysis.cpp src/ir.cpp
     src/project.cpp src/serialization.cpp
     src/flow_recovery.cpp src/enrichment.cpp src/debug_symbols.cpp
-    src/decompiler.cpp src/decompiler_lift.cpp src/decompilation_cache.cpp
+    src/decompiler.cpp src/decompiler_lift.cpp src/function_abi.cpp
+    src/stack_abi_observation.cpp src/stack_frame_analysis.cpp
+    src/stack_value_flow_analysis.cpp src/memory_dependence.cpp
+    src/memory_ssa_analysis.cpp src/memory_region_analysis.cpp
+    src/interprocedural.cpp src/effect_summary.cpp src/region_effect_analysis.cpp
+    src/type_evidence_analysis.cpp src/hir_analysis.cpp
+    src/control_region_analysis.cpp src/structuring_plan.cpp
+    src/ir_semantic_audit.cpp
+    src/call_effects.cpp src/decompilation_cache.cpp
     src/investigation_files.cpp src/investigation_emulator.cpp
     src/debugger.cpp src/plugin.cpp src/benchmark.cpp
 )
@@ -40,24 +48,46 @@ else()
     target_compile_definitions(reworkbench_native PRIVATE REWORKBENCH_HAS_CAPSTONE=0)
     message(STATUS "Capstone5 not found: format/bytes/string analysis available; assembly and IR decoding unavailable")
 endif()
-qt_add_executable(reworkbench WIN32
-    src/main.cpp ui/record_model.cpp ui/hex_view.cpp
+add_library(reworkbench_ui STATIC
+    ui/record_model.cpp ui/hex_view.cpp
     ui/graph_view.cpp ui/import_dialog.cpp ui/main_window.cpp
     ui/investigation_actions.cpp ui/code_highlighter.cpp ui/debugger_dialog.cpp
+    ui/workspace_theme.cpp ui/workspace_shell.cpp ui/code_editor.cpp ui/assistant_panel.cpp
+    ui/window_chrome.cpp ui/binary_explorer.cpp ui/application_brand.cpp
+    ui/workbench_icons.cpp ui/quick_picker.cpp assets/codicons/codicons.qrc assets/seti/seti.qrc
+    assets/brand/brand.qrc
 )
-target_include_directories(reworkbench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ui")
-target_link_libraries(reworkbench PRIVATE reworkbench_native Qt6::Widgets Qt6::Concurrent)
+set_target_properties(reworkbench_ui PROPERTIES AUTORCC ON)
+target_include_directories(reworkbench_ui PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ui")
+target_link_libraries(reworkbench_ui PUBLIC reworkbench_native Qt6::Widgets Qt6::Concurrent)
+qt_add_executable(reworkbench WIN32 src/main.cpp)
+if(WIN32)
+    enable_language(RC)
+    set(REWORK_BRAND_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/assets/brand/rework.ico")
+    configure_file(assets/brand/rework.rc.in "${CMAKE_CURRENT_BINARY_DIR}/rework.rc" @ONLY)
+    target_sources(reworkbench PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/rework.rc")
+endif()
+target_link_libraries(reworkbench PRIVATE reworkbench_ui)
 qt_add_executable(reworkbench-cli src/cli_main.cpp)
 target_link_libraries(reworkbench-cli PRIVATE reworkbench_native)
-foreach(target reworkbench_native reworkbench reworkbench-cli)
+foreach(target reworkbench_native reworkbench_ui reworkbench reworkbench-cli)
     if(MSVC)
-        target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /EHsc)
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/W4;/permissive-;/utf-8;/EHsc>")
     else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>")
     endif()
 endforeach()
+option(REWORKBENCH_BUILD_UI_TESTS "Build native Qt workspace interaction tests" OFF)
+if(REWORKBENCH_BUILD_UI_TESTS)
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
+    qt_add_executable(reworkbench-ui-tests tests/ui_tests.cpp)
+    target_link_libraries(reworkbench-ui-tests PRIVATE reworkbench_ui Qt6::Test)
+endif()
 install(TARGETS reworkbench RUNTIME DESTINATION bin BUNDLE DESTINATION .)
 install(TARGETS reworkbench-cli RUNTIME DESTINATION bin)
+install(FILES assets/codicons/LICENSE assets/codicons/LICENSE-CODE assets/codicons/NOTICE.md
+    DESTINATION share/reworkbench/licenses/codicons)
+install(FILES assets/seti/LICENSE.md assets/seti/NOTICE.md DESTINATION share/reworkbench/licenses/seti)
 option(REWORKBENCH_BUILD_EXAMPLE_EXTENSION "Build the optional native extension example" OFF)
 if(REWORKBENCH_BUILD_EXAMPLE_EXTENSION)
     add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../extensions/example" "${CMAKE_CURRENT_BINARY_DIR}/example_extension")

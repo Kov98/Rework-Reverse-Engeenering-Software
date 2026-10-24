@@ -4,12 +4,23 @@ The C++ decompiler is implemented in `decompiler.cpp`, `decompiler_lift.cpp` and
 `decompiler_internal.hpp`, with public API in `reworkbench/decompiler.hpp`.
 It does not invoke Ghidra, Python, a remote service or an external decompiler.
 It consumes an existing immutable native `AnalysisSnapshot`; decoding and sample
-execution are not part of this API. The source has not been compiled or executed.
+execution are not part of this API. Current build and runtime coverage is tracked
+in [validation.md](../../../docs/validation.md); it does not establish general semantic equivalence.
 
 ```cpp
 auto result = reworkbench::decompile_function(snapshot, function_index);
 // result.pseudocode, result.ssa_text, result.warnings
 ```
+
+`pseudocode_addresses` and `ssa_addresses` map zero-based output lines to exact
+original instruction addresses. `RenderedFunction::source_addresses` provides the
+same metadata for the low-level IR. Instruction comments, attributable definitions
+and explicit instruction control keep their origin; synthetic declarations,
+inputs, phi transfers and ambiguous merged control do not acquire a guessed
+address. Output ceilings discard mappings for cut lines and truncation markers.
+This metadata supports line navigation, not per-token variable recovery. The
+default decompilation cache uses format/key v2 to preserve and validate it; older
+entries are recomputed without a project migration or semantics-version change.
 
 An invalid function index raises `std::out_of_range`. Cancellation raises the
 existing `Cancelled` exception. Unsupported architectures, invalid/overlapping

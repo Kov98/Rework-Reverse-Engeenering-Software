@@ -1,4 +1,5 @@
 #include "main_window.hpp"
+#include "workspace_theme.hpp"
 #include "debugger_dialog.hpp"
 #include "reworkbench/decompilation_cache.hpp"
 #include "reworkbench/enrichment.hpp"
@@ -27,7 +28,7 @@ QJsonDocument json_input(const QString& text, bool object) {
 void MainWindow::show_tool_result(const QString& title, const QJsonObject& result) {
     auto* dialog = new QDialog(this); dialog->setAttribute(Qt::WA_DeleteOnClose); dialog->setWindowTitle(title); dialog->resize(1000, 720);
     auto* layout = new QVBoxLayout(dialog); auto* text = new QPlainTextEdit;
-    text->setReadOnly(true); text->setFont(QFont(QStringLiteral("Consolas"), 10)); text->setLineWrapMode(QPlainTextEdit::NoWrap);
+    text->setReadOnly(true); text->setFont(default_code_font()); text->setLineWrapMode(QPlainTextEdit::NoWrap);
     auto output = QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Indented));
     if (output.size() > 2 * 1024 * 1024) { output.truncate(2 * 1024 * 1024); output += QStringLiteral("\n… Visualização limitada a 2 MiB. Use a CLI para o resultado completo."); }
     text->setPlainText(output); layout->addWidget(text);

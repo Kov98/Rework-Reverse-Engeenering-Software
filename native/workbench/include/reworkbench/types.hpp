@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QJsonObject>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -193,6 +194,8 @@ inline void check_cancelled(std::stop_token stop) {
 
 struct RenderedFunction {
     QString text;
+    // Zero-based output lines with an exact original instruction; synthetic lines are omitted.
+    QMap<int, Address> source_addresses;
     quint32 modeled_instructions = 0;
     quint32 total_instructions = 0;
     bool complete = false;

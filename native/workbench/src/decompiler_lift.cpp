@@ -171,7 +171,14 @@ public:
     Value extract(Value value, int offset, int width) {
         const QString key = QStringLiteral("%1:%2:%3").arg(value).arg(offset).arg(width);
         const auto existing = extracts_.constFind(key);
-        if (existing != extracts_.cend()) return *existing;
+        // Never reuse a definition owned by another basic block: doing so
+        // may introduce a use not dominated by its original definition.
+        // Within a block, the first extraction already precedes later uses.
+        // Cross-block common-subexpression elimination requires a separate
+        // dominance-aware pass after the CFG and SSA are finalized.
+        if (existing != extracts_.cend()
+            && program_.nodes[*existing].block == current_block_)
+            return *existing;
         const auto id = unary(Op::Extract, value, width);
         program_.nodes[id].bit_offset = offset;
         extracts_.insert(key, id);
@@ -345,10 +352,11 @@ public:
 
     void opaque(const Instruction& instruction, const QString& reason) {
         comparison_.valid = false;
-        const auto effect = node(Op::Opaque, { TypeKind::OpaqueState, 0 }, state_,
+        const auto effect = node(instruction.flow == FlowKind::Call ? Op::CallOpaque : Op::Opaque,
+            { TypeKind::OpaqueState, 0 }, state_,
             instruction.mnemonic.left(64) + QLatin1Char(' ') + instruction.operands_text.left(512) + QStringLiteral(" | ") + reason);
-        for (qsizetype i = 0; i < program_.slots.size(); ++i)
-            state_[i] = node(Op::StateField, program_.slots[i].type, { effect }, program_.slots[i].name);
+        for (qsizetype i = 0; i < program_.state_slots.size(); ++i)
+            state_[i] = node(Op::StateField, program_.state_slots[i].type, { effect }, program_.state_slots[i].name);
         program_.incomplete = true;
     }
 
@@ -489,8 +497,8 @@ public:
             QStringList{ QStringLiteral("eax"), QStringLiteral("ebx"), QStringLiteral("ecx"), QStringLiteral("edx"),
                 QStringLiteral("esi"), QStringLiteral("edi"), QStringLiteral("esp"), QStringLiteral("ebp") };
         auto slot = [&](const QString& name, Type type) {
-            program_.slot_index.insert(name, program_.slots.size());
-            program_.slots.push_back({ name, type });
+            program_.slot_index.insert(name, program_.state_slots.size());
+            program_.state_slots.push_back({ name, type });
             program_.initial << node(Op::Input, type, {}, name);
         };
         for (const auto& root : roots) slot(root, bits(program_.register_width));
@@ -501,7 +509,7 @@ public:
             auto& block = program_.blocks[b];
             if (!block.reachable) continue;
             current_block_ = b; current_address_ = block.address;
-            for (const auto& description : program_.slots)
+            for (const auto& description : program_.state_slots)
                 block.input << node(Op::Phi, description.type, {}, description.name);
         }
         for (qsizetype b = 0; b < program_.blocks.size(); ++b) {
@@ -541,7 +549,7 @@ public:
         for (qsizetype b = 0; b < program_.blocks.size(); ++b) {
             auto& block = program_.blocks[b];
             if (!block.reachable) continue;
-            for (qsizetype s = 0; s < program_.slots.size(); ++s) {
+            for (qsizetype s = 0; s < program_.state_slots.size(); ++s) {
                 auto& phi = program_.nodes[block.input[s]];
                 if (b == program_.entry) phi.incoming.push_back({ -1, program_.initial[s] });
                 for (const auto predecessor : block.predecessors)

@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/codicons">
+        <file>codicon.ttf</file>
+        <file>LICENSE</file>
+        <file>LICENSE-CODE</file>
+        <file>NOTICE.md</file>
+    </qresource>
+</RCC>

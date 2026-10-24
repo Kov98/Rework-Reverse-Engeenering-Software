@@ -1,6 +1,6 @@
 # Projetos nativos
 
-O projeto próprio usa Qt Core e o driver **QtSql QSQLITE** do Qt 6.5 ou posterior. Não inicia Python, JVM, Ghidra nem a amostra. Esta entrega é código-fonte: não foram executados testes, compilação ou aplicação.
+O projeto próprio usa Qt Core e o driver **QtSql QSQLITE** do Qt 6.5 ou posterior. Não inicia Python, JVM, Ghidra nem a amostra. A validação inicial de compilação, QSQLITE e persistência está registrada em [validation.md](../../../docs/validation.md).
 
 Uma pasta inicialmente vazia recebe `project.rwb.json`, `index.sqlite3`, `samples/` e `exports/`. O manifesto tem `application: "reworkbench-independent-native"`, `schema: 1`, um UUID e nomes internos fixos. Um manifesto de versão futura é recusado. A presença de `project.json` identifica um projeto legado e produz recusa explícita; não há conversão automática.
 

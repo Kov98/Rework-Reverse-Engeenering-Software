@@ -259,10 +259,14 @@ RenderedFunction render_ir(const Function& function, Architecture architecture, 
     for (const auto& instruction : function.instructions) {
         check_cancelled(stop);
         if (block_starts.contains(instruction.address.value)) lines << QStringLiteral("  block %1:").arg(instruction.address.text());
+        rendered.source_addresses.insert(int(lines.size()), instruction.address);
         lines << QStringLiteral("    ; %1  %2 %3").arg(instruction.address.text(), single_line(instruction.mnemonic), single_line(instruction.operands_text));
         const auto translation = translate(instruction, architecture);
         if (translation.modeled) ++rendered.modeled_instructions;
-        for (const auto& statement : translation.statements) lines << QStringLiteral("    ") + statement;
+        for (const auto& statement : translation.statements) {
+            rendered.source_addresses.insert(int(lines.size()), instruction.address);
+            lines << QStringLiteral("    ") + statement;
+        }
     }
     rendered.complete = rendered.total_instructions != 0 && rendered.modeled_instructions == rendered.total_instructions && !function.partial;
     lines << QStringLiteral("}")

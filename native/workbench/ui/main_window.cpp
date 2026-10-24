@@ -1,21 +1,32 @@
 #include "main_window.hpp"
+#include "application_brand.hpp"
 #include "graph_view.hpp"
 #include "hex_view.hpp"
 #include "import_dialog.hpp"
 #include "reworkbench/decompilation_cache.hpp"
 #include "code_highlighter.hpp"
+#include "code_editor.hpp"
+#include "assistant_panel.hpp"
+#include "workspace_theme.hpp"
+#include "binary_explorer.hpp"
+#include "window_chrome.hpp"
+#include <QApplication>
+#include <QSignalBlocker>
 
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDialog>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFile>
+#include <QScreen>
 #include <QFont>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPointer>
+#include <QToolButton>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSplitter>
@@ -24,6 +35,13 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <windowsx.h>
+#endif
 
 namespace reworkbench::ui {
 namespace {
@@ -42,7 +60,7 @@ void persist_drafts(const std::shared_ptr<Project>& project, const QString& id,
 QWidget* panel(const QString& title, QWidget* widget) {
     auto* result = new QWidget;
     auto* layout = new QVBoxLayout(result);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(0);
     auto* label = new QLabel(title);
     label->setObjectName(QStringLiteral("panelTitle"));
     layout->addWidget(label);
@@ -52,25 +70,62 @@ QWidget* panel(const QString& title, QWidget* widget) {
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), settings_(QStringLiteral("REWorkbench"), QStringLiteral("Native")) {
-    setWindowTitle(QStringLiteral("REWorkbench · Engenharia reversa"));
-    resize(1560, 980);
-    setMinimumSize(1100, 740);
+    : QMainWindow(parent), settings_(QSettings::defaultFormat(), QSettings::UserScope, QStringLiteral("REWorkbench"), QStringLiteral("Native")) {
+    apply_workspace_theme(*qApp);
+    setWindowFlag(Qt::FramelessWindowHint);
+    setWindowTitle(QStringLiteral("Rework"));
+    setWindowIcon(application_icon());
+    resize(1440, 900);
+    setMinimumSize(960, 540);
     build_actions();
     build_workspace();
+    build_workspace_shell();
+    menus_ = new QMenuBar;
     build_menus();
+    chrome_ = new WindowChrome(this, menus_, actions_["back"], actions_["forward"], actions_["quick_open"],
+                               actions_["toggle_sidebar"], actions_["toggle_panel"], actions_["toggle_assistant"]);
+    setMenuWidget(chrome_);
     task_ = new QFutureWatcher<TaskResult>(this);
     connect(task_, &QFutureWatcher<TaskResult>::finished, this, [this] { finish_task(); });
     if (settings_.contains(QStringLiteral("window/geometry"))) restoreGeometry(settings_.value(QStringLiteral("window/geometry")).toByteArray());
-    if (settings_.contains(QStringLiteral("window/state"))) restoreState(settings_.value(QStringLiteral("window/state")).toByteArray());
+    if (const auto* current_screen = screen()) {
+        const auto available = current_screen->availableGeometry();
+        resize(std::min(width(), available.width()), std::min(height(), available.height()));
+        move(std::clamp(x(), available.left(), std::max(available.left(), available.right() - width() + 1)),
+             std::clamp(y(), available.top(), std::max(available.top(), available.bottom() - height() + 1)));
+    }
+    restore_workspace();
     update_actions();
     log(QStringLiteral("Motor próprio C++ · %1").arg(decoder_description()));
 }
 MainWindow::~MainWindow() { stop_.request_stop(); selection_stop_.request_stop(); audit_stop_.request_stop(); }
 
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
+#ifdef Q_OS_WIN
+    const auto* native = static_cast<MSG*>(message);
+    if (native->message == WM_NCHITTEST && !isMaximized() && !isFullScreen()) {
+        RECT rect;
+        if (GetWindowRect(native->hwnd, &rect)) {
+            const int x = GET_X_LPARAM(native->lParam), y = GET_Y_LPARAM(native->lParam);
+            const int border = qRound(6 * devicePixelRatioF());
+            const bool left = x < rect.left + border, right = x >= rect.right - border;
+            const bool top = y < rect.top + border, bottom = y >= rect.bottom - border;
+            if (left || right || top || bottom) {
+                *result = top ? (left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP)
+                              : bottom ? (left ? HTBOTTOMLEFT : right ? HTBOTTOMRIGHT : HTBOTTOM)
+                                       : left ? HTLEFT : HTRIGHT;
+                return true;
+            }
+        }
+    }
+#endif
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+
 void MainWindow::build_actions() {
     const auto add = [this](const QString& key, const QString& text, const QKeySequence& shortcut, std::function<void()> callback) {
         auto* action = new QAction(text, this);
+        action->setObjectName(key);
         action->setShortcut(shortcut);
         connect(action, &QAction::triggered, this, [callback] { callback(); });
         actions_.insert(key, action);
@@ -100,7 +155,7 @@ void MainWindow::build_actions() {
     add(QStringLiteral("cancel"), QStringLiteral("Interromper"), QKeySequence(QStringLiteral("Esc")), [this] {
         stop_.request_stop(); selection_stop_.request_stop(); status_->setText(QStringLiteral("Interrompendo…"));
     });
-    add(QStringLiteral("about"), QStringLiteral("Sobre a bancada"), {}, [this] { about(); });
+    add(QStringLiteral("about"), QStringLiteral("Sobre o Rework"), {}, [this] { about(); });
     add(QStringLiteral("quit"), QStringLiteral("Sair"), QKeySequence::Quit, [this] { close(); });
 }
 
@@ -108,22 +163,17 @@ QDockWidget* MainWindow::add_dock(const QString& key, const QString& title, QWid
     auto* dock = new QDockWidget(title, this);
     dock->setObjectName(key + QStringLiteral("Dock"));
     dock->setWidget(widget);
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetClosable | QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
     addDockWidget(area, dock);
     docks_.insert(key, dock);
     return dock;
 }
 void MainWindow::build_workspace() {
-    auto* toolbar = addToolBar(QStringLiteral("Principal"));
-    toolbar->setObjectName(QStringLiteral("mainToolbar"));
-    toolbar->setMovable(false);
-    for (const auto& key : {QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("import")}) toolbar->addAction(actions_[key]);
-    toolbar->addSeparator();
     analyses_ = new QComboBox;
-    analyses_->setMinimumContentsLength(24);
+    analyses_->setMinimumContentsLength(8);
+    analyses_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     analyses_->setToolTip(QStringLiteral("Análises do projeto"));
-    toolbar->addWidget(analyses_);
-    toolbar->addSeparator();
-    for (const auto& key : {QStringLiteral("back"), QStringLiteral("forward"), QStringLiteral("jump"), QStringLiteral("rename"), QStringLiteral("cancel")}) toolbar->addAction(actions_[key]);
     connect(analyses_, &QComboBox::currentIndexChanged, this, [this](int index) {
         const auto id = analyses_->itemData(index).toString();
         if (!id.isEmpty() && id != analysis_id_ && !busy_) activate_analysis(id);
@@ -133,10 +183,10 @@ void MainWindow::build_workspace() {
     auto* welcome_layout = new QVBoxLayout(welcome);
     welcome_layout->setContentsMargins(45, 45, 45, 45);
     welcome_layout->addStretch();
-    auto* overline = new QLabel(QStringLiteral("REWORKBENCH  /  NATIVE ANALYSIS"));
+    auto* overline = new QLabel(QStringLiteral("REWORK  /  ALFA 0.3"));
     overline->setObjectName(QStringLiteral("overline"));
     welcome_layout->addWidget(overline);
-    auto* title = new QLabel(QStringLiteral("Explore o que existe\nalém do executável."));
+    auto* title = new QLabel(QStringLiteral("Seu espaço de\nengenharia reversa."));
     title->setObjectName(QStringLiteral("welcomeTitle"));
     welcome_layout->addWidget(title);
     auto* description = new QLabel(QStringLiteral("Um espaço próprio para conectar funções, instruções, referências e evidências.\nAnálise estática, projetos locais e um núcleo independente em C++."));
@@ -145,11 +195,15 @@ void MainWindow::build_workspace() {
     auto* buttons = new QHBoxLayout;
     for (const auto& key : {QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("bytes")}) {
         auto* button = new QPushButton(actions_[key]->text());
-        button->setMinimumHeight(44);
+        if (key == QStringLiteral("new")) button->setObjectName("primaryButton");
+        button->setMinimumHeight(32);
         connect(button, &QPushButton::clicked, actions_[key], &QAction::trigger);
         buttons->addWidget(button);
     }
     welcome_layout->addLayout(buttons);
+    auto* commands = new QPushButton(QStringLiteral("Paleta de comandos                                      Ctrl+Shift+P"));
+    connect(commands, &QPushButton::clicked, this, [this] { show_command_palette(); });
+    welcome_layout->addWidget(commands);
     auto* formats = new QLabel(QStringLiteral("PE / ELF / Mach-O / RAW  ·  Assembly / IR / CFG  ·  Projetos locais"));
     formats->setObjectName(QStringLiteral("muted"));
     formats->setWordWrap(true);
@@ -158,56 +212,97 @@ void MainWindow::build_workspace() {
     central_->addWidget(welcome);
     auto* workspace = new QWidget;
     auto* workspace_layout = new QVBoxLayout(workspace);
-    workspace_layout->setContentsMargins(0, 0, 0, 0);
+    workspace_layout->setContentsMargins(0, 0, 0, 0); workspace_layout->setSpacing(0);
+    documents_ = new QTabBar;
+    documents_->setObjectName("functionTabs"); documents_->setDocumentMode(true);
+    documents_->setMovable(true); documents_->setTabsClosable(true); documents_->setExpanding(false);
+    documents_->setUsesScrollButtons(true); documents_->setElideMode(Qt::ElideMiddle);
+    workspace_layout->addWidget(documents_);
     function_heading_ = new QLabel(QStringLiteral("Selecione uma função"));
-    function_heading_->setObjectName(QStringLiteral("codeHeading"));
+    function_heading_->setObjectName(QStringLiteral("functionHeading"));
+    function_heading_->setFixedHeight(26);
     function_heading_->setTextFormat(Qt::PlainText);
     function_heading_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     workspace_layout->addWidget(function_heading_);
     ir_status_ = new QLabel(QStringLiteral("A representação intermediária é parcial e não recupera o código original."));
     ir_status_->setWordWrap(true);
+    ir_status_->hide();
     workspace_layout->addWidget(ir_status_);
-    auto* panes = new QSplitter(Qt::Horizontal);
+    auto* panes = new QSplitter(Qt::Horizontal); editor_split_ = panes; panes->setHandleWidth(3);
     assembly_ = new Explorer(Dataset::Assembly, {QStringLiteral("Endereço"), QStringLiteral("Bytes"), QStringLiteral("Instrução"), QStringLiteral("Operandos")});
-    assembly_->activated = [this](const Record& row, int) { if (row.file_offset) show_offset(*row.file_offset); };
-    panes->addWidget(panel(QStringLiteral("ASSEMBLY"), assembly_));
-    auto* representation = new QTabWidget;
-    pseudocode_ = new QPlainTextEdit;
-    ssa_ = new QPlainTextEdit;
+    assembly_->set_compact(true);
+    assembly_->activated = [this](const Record& row, int) {
+        if (row.other_address) navigate(*row.other_address);
+        else if (row.address) select_instruction(*row.address);
+    };
+    assembly_->selected = [this](const Record& row) { if (row.address) select_instruction(*row.address); };
+    listing_panel_ = panel(QStringLiteral("Listagem · Assembly"), assembly_);
+    listing_panel_->setObjectName("listingPanel");
+    panes->addWidget(listing_panel_);
+    auto* representation = new QTabWidget; representation_ = representation;
+    representation->setObjectName("representationTabs"); representation->setDocumentMode(true);
+    representation->setMovable(true); representation->setTabsClosable(true);
+    representation->setUsesScrollButtons(true); representation->setElideMode(Qt::ElideRight);
+    representation->tabBar()->setExpanding(false); representation->setElideMode(Qt::ElideNone);
+    pseudocode_ = new CodeEditor; pseudocode_->setObjectName("pseudocodeEditor");
+    ssa_ = new CodeEditor; ssa_->setObjectName("ssaEditor");
     for (auto* editor : {pseudocode_, ssa_}) {
-        editor->setReadOnly(true); editor->setFont(QFont(QStringLiteral("Consolas"), 11));
+        editor->setReadOnly(true); editor->setFont(default_code_font());
         editor->setLineWrapMode(QPlainTextEdit::NoWrap); new CodeHighlighter(editor->document());
     }
     decompiler_status_ = new QLabel(QStringLiteral("Decompilador próprio · selecione uma função"));
-    decompiler_status_->setWordWrap(true);
+    decompiler_status_->setObjectName("decompilerStatus");
+    decompiler_status_->setWordWrap(false); decompiler_status_->setFixedHeight(22);
+    decompiler_status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto* decompiler_panel = new QWidget;
+    decompiler_panel->setObjectName("pseudocodePanel");
     auto* decompiler_layout = new QVBoxLayout(decompiler_panel);
-    decompiler_layout->setContentsMargins(0, 0, 0, 0);
+    decompiler_layout->setContentsMargins(0, 0, 0, 0); decompiler_layout->setSpacing(0);
     decompiler_layout->addWidget(decompiler_status_); decompiler_layout->addWidget(pseudocode_);
     representation->addTab(decompiler_panel, QStringLiteral("Pseudocódigo"));
-    representation->addTab(ssa_, QStringLiteral("SSA / fluxo de dados"));
-    ir_ = new QPlainTextEdit;
+    representation->addTab(ssa_, QStringLiteral("SSA"));
+    ir_ = new CodeEditor; ir_->setObjectName("irEditor");
+    for (auto* editor : {pseudocode_, ssa_, ir_}) {
+        static_cast<CodeEditor*>(editor)->address_selected = [this, editor](Address address) {
+            select_instruction(address, editor);
+        };
+    }
     ir_->setReadOnly(true);
-    ir_->setFont(QFont(QStringLiteral("Consolas"), 11));
+    ir_->setFont(default_code_font());
     ir_->setLineWrapMode(QPlainTextEdit::NoWrap);
     new CodeHighlighter(ir_->document());
-    representation->addTab(ir_, QStringLiteral("IR · semântica parcial"));
+    representation->addTab(ir_, QStringLiteral("IR"));
     graph_ = new GraphView;
-    representation->addTab(graph_, QStringLiteral("Fluxo de controle"));
+    graph_->setObjectName("graphView");
+    representation->addTab(graph_, QStringLiteral("Grafo"));
+    graph_->activated = [this](Address address) { navigate(address); };
+    graph_->selected = [this](Address address) { select_instruction(address); };
     panes->addWidget(representation);
     panes->setStretchFactor(0, 1); panes->setStretchFactor(1, 1);
-    auto* vertical = new QSplitter(Qt::Vertical);
-    vertical->addWidget(panes);
     references_ = new Explorer(Dataset::References, {QStringLiteral("Origem"), QStringLiteral("Destino"), QStringLiteral("Tipo")});
+    references_->set_compact(true);
     references_->activated = [this](const Record& row, int column) {
         if (column == 1 && row.other_address) navigate(*row.other_address);
         else if (row.address) navigate(*row.address);
     };
-    vertical->addWidget(panel(QStringLiteral("REFERÊNCIAS · clique na origem ou no destino para navegar"), references_));
-    vertical->setStretchFactor(0, 4); vertical->setStretchFactor(1, 1);
-    workspace_layout->addWidget(vertical);
+    workspace_layout->addWidget(panes, 1);
     central_->addWidget(workspace);
     setCentralWidget(central_);
+    bottom_panel_ = new QTabWidget;
+    bottom_panel_->setObjectName("bottomPanel"); bottom_panel_->setDocumentMode(true);
+    bottom_panel_->setMinimumHeight(80);
+    bottom_panel_->setMovable(true); bottom_panel_->setTabPosition(QTabWidget::North);
+    bottom_panel_->addTab(references_, QStringLiteral("Referências"));
+    auto* bottom_dock = add_dock("panel", QStringLiteral("Painel"), bottom_panel_, Qt::BottomDockWidgetArea);
+    auto* no_header = new QWidget; no_header->setFixedHeight(0); bottom_dock->setTitleBarWidget(no_header);
+
+    binary_explorer_ = new BinaryExplorer;
+    binary_explorer_->activated = [this](Address address) { navigate(address); };
+    binary_explorer_->offset_activated = [this](quint64 offset) { show_offset(offset); show_bottom_tab(hex_); };
+    auto* sidebar = new QWidget;
+    auto* sidebar_layout = new QVBoxLayout(sidebar); sidebar_layout->setContentsMargins(0, 0, 0, 0); sidebar_layout->setSpacing(0);
+    sidebar_layout->addWidget(analyses_); sidebar_layout->addWidget(binary_explorer_, 1);
+    add_dock("explorer", QStringLiteral("EXPLORADOR"), sidebar, Qt::LeftDockWidgetArea);
 
     struct Definition { Dataset dataset; QString key; QString title; QStringList columns; };
     const QVector<Definition> definitions{
@@ -217,24 +312,21 @@ void MainWindow::build_workspace() {
         {Dataset::Imports, QStringLiteral("imports"), QStringLiteral("Imports"), {QStringLiteral("Slot"), QStringLiteral("Nome"), QStringLiteral("Biblioteca")}},
         {Dataset::Regions, QStringLiteral("regions"), QStringLiteral("Regiões"), {QStringLiteral("Endereço"), QStringLiteral("Nome"), QStringLiteral("Tamanho virtual"), QStringLiteral("Acesso"), QStringLiteral("Offset")}},
     };
-    QDockWidget* previous = nullptr;
+    auto* datasets = new QTabWidget; datasets->setDocumentMode(true); datasets->setObjectName("datasetsPanel");
     for (const auto& definition : definitions) {
         auto* explorer = new Explorer(definition.dataset, definition.columns);
-        explorer->setMinimumWidth(275);
+        explorer->set_compact(true);
         explorer->activated = [this](const Record& row, int) { if (row.address) navigate(*row.address); if (row.file_offset) show_offset(*row.file_offset); };
         explorers_.insert(definition.dataset, explorer);
-        auto* dock = add_dock(definition.key, definition.title, explorer, Qt::LeftDockWidgetArea);
-        if (previous) tabifyDockWidget(previous, dock);
-        previous = dock;
+        if (definition.dataset == Dataset::Functions) explorer->view()->setObjectName("functionTable");
+        datasets->addTab(explorer, definition.title);
     }
-    docks_[QStringLiteral("functions")]->raise();
     hex_ = new HexView;
-    add_dock(QStringLiteral("hex"), QStringLiteral("Bytes da amostra"), hex_, Qt::BottomDockWidgetArea);
+    bottom_panel_->addTab(hex_, QStringLiteral("Hexadecimal"));
     console_ = new QPlainTextEdit;
     console_->setReadOnly(true); console_->setMaximumBlockCount(2000);
-    add_dock(QStringLiteral("console"), QStringLiteral("Atividade"), console_, Qt::BottomDockWidgetArea);
-    tabifyDockWidget(docks_[QStringLiteral("hex")], docks_[QStringLiteral("console")]);
-    docks_[QStringLiteral("hex")]->raise();
+    bottom_panel_->addTab(console_, QStringLiteral("Saída"));
+    bottom_panel_->addTab(datasets, QStringLiteral("Dados"));
     auto* investigation = new QTabWidget;
     auto* note_panel = new QWidget;
     auto* note_layout = new QVBoxLayout(note_panel);
@@ -265,37 +357,46 @@ void MainWindow::build_workspace() {
         if (!item->data(Qt::UserRole).toString().isEmpty())
             try { navigate(parse_address(item->data(Qt::UserRole).toString())); } catch (const std::exception& exception) { error(exception_text(exception)); }
     });
-    add_dock(QStringLiteral("investigation"), QStringLiteral("Investigação"), investigation, Qt::RightDockWidgetArea);
+    bottom_panel_->addTab(investigation, QStringLiteral("Anotações"));
     metadata_ = new QPlainTextEdit;
     metadata_->setReadOnly(true);
-    add_dock(QStringLiteral("metadata"), QStringLiteral("Informações da amostra"), metadata_, Qt::RightDockWidgetArea);
-    tabifyDockWidget(docks_[QStringLiteral("investigation")], docks_[QStringLiteral("metadata")]);
-    docks_[QStringLiteral("investigation")]->raise();
+    bottom_panel_->addTab(metadata_, QStringLiteral("Amostra"));
     status_ = new QLabel(QStringLiteral("Crie ou abra um projeto nativo para começar."));
     status_->setTextFormat(Qt::PlainText);
+    status_->setMaximumWidth(660);
+    status_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     statusBar()->addWidget(status_, 1);
     progress_ = new QProgressBar;
     progress_->setMaximumWidth(170);
     progress_->setRange(0, 0); progress_->hide();
     statusBar()->addPermanentWidget(progress_);
-    statusBar()->addPermanentWidget(new QLabel(QStringLiteral("C++20 · motor próprio")));
+    sample_status_ = new QLabel(QStringLiteral("ALFA 0.3 · Sem amostra"));
+    statusBar()->addPermanentWidget(sample_status_);
+    statusBar()->setFixedHeight(22);
 }
 void MainWindow::build_menus() {
-    auto* file = menuBar()->addMenu(QStringLiteral("Arquivo"));
+    auto* file = menus_->addMenu(QStringLiteral("Arquivo"));
     for (const auto& key : {QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("import"), QStringLiteral("bytes"), QStringLiteral("save")}) file->addAction(actions_[key]);
     file->addSeparator(); file->addAction(actions_[QStringLiteral("json")]); file->addAction(actions_[QStringLiteral("ir")]);
     file->addSeparator(); file->addAction(actions_[QStringLiteral("quit")]);
-    auto* navigate_menu = menuBar()->addMenu(QStringLiteral("Navegar"));
+    auto* navigate_menu = menus_->addMenu(QStringLiteral("Navegar"));
     for (const auto& key : {QStringLiteral("back"), QStringLiteral("forward"), QStringLiteral("jump"), QStringLiteral("rename")}) navigate_menu->addAction(actions_[key]);
-    auto* analysis = menuBar()->addMenu(QStringLiteral("Análise"));
+    for (const auto& key : {"quick_open", "next_document", "previous_document", "follow_target", "show_references"}) navigate_menu->addAction(actions_[key]);
+    auto* analysis = menus_->addMenu(QStringLiteral("Análise"));
     analysis->addAction(actions_[QStringLiteral("cancel")]);
     for (const auto& key : {QStringLiteral("symbols"), QStringLiteral("enrichment"), QStringLiteral("emulate")}) analysis->addAction(actions_[key]);
-    auto* tools = menuBar()->addMenu(QStringLiteral("Ferramentas"));
+    auto* tools = menus_->addMenu(QStringLiteral("Ferramentas"));
     for (const auto& key : {QStringLiteral("diff"), QStringLiteral("patch"), QStringLiteral("debugger"), QStringLiteral("extensions")}) tools->addAction(actions_[key]);
     file->addAction(actions_[QStringLiteral("pseudocode")]);
-    auto* view = menuBar()->addMenu(QStringLiteral("Visualizar"));
+    auto* view = menus_->addMenu(QStringLiteral("Visualizar"));
+    for (const auto& key : {"toggle_sidebar", "toggle_panel", "toggle_assistant", "toggle_listing", "focus_listing", "focus_decompiler"}) view->addAction(actions_[key]);
+    view->addSeparator();
     for (auto* dock : docks_) view->addAction(dock->toggleViewAction());
-    menuBar()->addMenu(QStringLiteral("Ajuda"))->addAction(actions_[QStringLiteral("about")]);
+    view->addSeparator();
+    auto* editors = view->addMenu(QStringLiteral("Editores"));
+    for (const auto& key : {"view_pseudocode", "view_ssa", "view_ir", "view_graph"}) editors->addAction(actions_[QString::fromLatin1(key)]);
+    for (const auto& key : {"font_increase", "font_decrease", "font_choose", "font_reset", "reduce_motion", "layout_reset", "command_palette", "document_close"}) view->addAction(actions_[QString::fromLatin1(key)]);
+    menus_->addMenu(QStringLiteral("Ajuda"))->addAction(actions_[QStringLiteral("about")]);
 }
 
 void MainWindow::start_task(const QString& label, Work work, Completion completion) {
@@ -350,6 +451,12 @@ void MainWindow::set_progress(const Progress& progress) {
     } else progress_->setRange(0, 0);
 }
 void MainWindow::update_actions() {
+    binary_explorer_->set_busy(busy_ || closing_);
+    for (const auto& key : {"next_document", "previous_document"}) actions_[key]->setEnabled(documents_->count() > 1 && !busy_ && !closing_);
+    actions_["follow_target"]->setEnabled(selected_function_ && !busy_ && !closing_);
+    actions_["quick_open"]->setEnabled(!busy_ && !closing_);
+    documents_->setEnabled(!busy_ && !closing_);
+    actions_[QStringLiteral("document_close")]->setEnabled(documents_->count() > 0 && !busy_ && !closing_);
     for (const auto& key : {QStringLiteral("new"), QStringLiteral("open"), QStringLiteral("bytes")}) actions_[key]->setEnabled(!busy_ && !closing_);
     actions_[QStringLiteral("import")]->setEnabled(project_ && !busy_ && !closing_);
     actions_[QStringLiteral("save")]->setEnabled(project_ && !busy_ && !closing_);
@@ -412,7 +519,11 @@ void MainWindow::install_project(const TaskResult& result) {
     project_ = result.project;
     history_.clear(); history_index_ = -1;
     drafts_.clear(); notes_.clear();
-    analysis_id_.clear(); snapshot_.reset(); selected_function_.reset(); note_address_.reset();
+    analysis_id_.clear(); snapshot_.reset(); selected_function_.reset(); selected_address_.reset(); note_address_.reset();
+    binary_explorer_->set_snapshot({});
+    chrome_->set_workspace(project_ ? QFileInfo(project_->root()).fileName() : QString{});
+    { const QSignalBlocker blocked(documents_); while (documents_->count()) documents_->removeTab(0); }
+    assistant_->set_selection({}, {}); sample_status_->setText(QStringLiteral("ALFA 0.3 · Sem amostra"));
     ++selection_token_; selection_stop_.request_stop();
     ++audit_token_; audit_stop_.request_stop();
     byte_path_.clear(); hex_->clear(); ir_->clear(); graph_->show_function(nullptr);
@@ -486,13 +597,16 @@ void MainWindow::activate_analysis(const QString& id, std::optional<Address> nav
         result.snapshot = std::make_shared<AnalysisSnapshot>(project->load_analysis(id, stop));
         result.notes = project->notes(id); return result;
     }, [this, navigation](const TaskResult& result) {
-        drafts_.clear(); install_snapshot(result);
-        if (navigation) navigate(*navigation, false);
+        drafts_.clear(); install_snapshot(result, navigation);
     });
 }
-void MainWindow::install_snapshot(const TaskResult& result) {
+void MainWindow::install_snapshot(const TaskResult& result, std::optional<Address> navigation) {
     selection_stop_.request_stop(); ++selection_token_;
-    snapshot_ = result.snapshot; analysis_id_ = result.analysis_id; selected_function_.reset();
+    snapshot_ = result.snapshot; analysis_id_ = result.analysis_id; selected_function_.reset(); selected_address_.reset();
+    binary_explorer_->set_snapshot(snapshot_);
+    chrome_->set_workspace(snapshot_->metadata.original_name);
+    { const QSignalBlocker blocked(documents_); while (documents_->count()) documents_->removeTab(0); }
+    assistant_->set_selection({}, {});
     notes_.clear();
     for (const auto& note : result.notes) notes_.insert(note.address.text(), note);
     analyses_->blockSignals(true);
@@ -508,6 +622,9 @@ void MainWindow::install_snapshot(const TaskResult& result) {
     byte_path_ = snapshot_->metadata.source_path;
     hex_->show_file(byte_path_);
     const auto& metadata = snapshot_->metadata;
+    sample_status_->setText(QStringLiteral("%1 · %2 · %3 funções").arg(format_name(metadata.format), architecture_name(metadata.architecture)).arg(snapshot_->functions.size()));
+    status_->setText(QFileInfo(project_->root()).fileName() + QStringLiteral("  ·  ") + state_name(snapshot_->state));
+    status_->setToolTip(project_->root());
     QStringList lines{
         QStringLiteral("Amostra\n%1").arg(metadata.original_name),
         QStringLiteral("Formato / arquitetura\n%1 · %2 · %3 bits").arg(format_name(metadata.format), architecture_name(metadata.architecture)).arg(metadata.bits),
@@ -523,12 +640,14 @@ void MainWindow::install_snapshot(const TaskResult& result) {
     for (const auto& warning : snapshot_->warnings) lines.push_back(QStringLiteral("Limite da análise\n") + warning);
     metadata_->setPlainText(lines.join(QStringLiteral("\n\n")));
     set_note_address({}); update_bookmarks(); update_audit();
-    if (!snapshot_->functions.isEmpty()) navigate(snapshot_->functions.first().address, false);
+    if (navigation) navigate(*navigation, false);
+    else if (!snapshot_->functions.isEmpty()) navigate(snapshot_->functions.first().address);
     update_actions();
 }
 
 void MainWindow::navigate(Address address, bool record_history) {
     if (!snapshot_ || busy_ || closing_) return;
+    central_->setCurrentIndex(1);
     qsizetype index = -1;
     for (qsizetype current = 0; current < snapshot_->functions.size(); ++current) {
         const auto& function = snapshot_->functions[current];
@@ -544,11 +663,23 @@ void MainWindow::navigate(Address address, bool record_history) {
             history_.resize(history_index_ + 1); history_.push_back(item); history_index_ = history_.size() - 1;
         }
     }
+    if (index >= 0 && selected_function_ && *selected_function_ == index && document_snapshot_.lock() == snapshot_) {
+        // Moving inside a loaded function keeps its documents, Find query and
+        // dataflow jobs intact. Only the exact source location changes.
+        const auto& function = snapshot_->functions[index];
+        open_function_tab(function.address, function.name);
+        select_instruction(address);
+        update_actions();
+        return;
+    }
     selected_function_.reset();
+    selected_address_ = address;
     selection_stop_.request_stop(); selection_stop_ = std::stop_source{};
     const auto token = ++selection_token_;
     set_note_address(address);
     if (index < 0) {
+        binary_explorer_->select_address(address);
+        assistant_->set_selection({}, {});
         function_heading_->setText(QStringLiteral("Endereço · ") + address.text());
         ir_->clear(); ir_status_->setText(QStringLiteral("Nenhuma função descoberta nesse endereço. Consulte as referências e os bytes."));
         pseudocode_->clear(); ssa_->clear(); decompiler_status_->setText(QStringLiteral("Nenhuma função descoberta para decompilar."));
@@ -557,8 +688,12 @@ void MainWindow::navigate(Address address, bool record_history) {
         update_actions(); return;
     }
     selected_function_ = index;
+    document_snapshot_ = snapshot_;
     const auto& function = snapshot_->functions[index];
-    function_heading_->setText(function.name + QStringLiteral(" · ") + function.address.text());
+    binary_explorer_->select_address(function.address);
+    open_function_tab(function.address, function.name);
+    assistant_->set_selection(analysis_id_ + QLatin1Char('/') + function.address.text(), function.name + QStringLiteral(" · ") + function.address.text());
+    function_heading_->setText(snapshot_->metadata.original_name + QStringLiteral("  ›  ") + function.name + QStringLiteral("  ›  ") + hex(address.value));
     assembly_->set_snapshot(snapshot_, index); references_->set_snapshot(snapshot_, index);
     graph_->show_function(&function);
     ir_->setPlainText(QStringLiteral("Construindo representação intermediária…"));
@@ -569,6 +704,12 @@ void MainWindow::navigate(Address address, bool record_history) {
         const auto result = decompilation->result(); decompilation->deleteLater();
         if (token != selection_token_ || closing_) return;
         pseudocode_->setPlainText(result.pseudocode); ssa_->setPlainText(result.ssa_text);
+        static_cast<CodeEditor*>(pseudocode_)->set_source_addresses(result.pseudocode_addresses);
+        static_cast<CodeEditor*>(ssa_)->set_source_addresses(result.ssa_addresses);
+        if (selected_address_) {
+            static_cast<CodeEditor*>(pseudocode_)->select_address(*selected_address_);
+            static_cast<CodeEditor*>(ssa_)->select_address(*selected_address_);
+        }
         decompiler_status_->setText(QStringLiteral("%1/%2 instruções modeladas · fluxo de dados %3%4").arg(result.modeled_instructions).arg(result.total_instructions)
             .arg(result.dataflow_converged ? QStringLiteral("convergente") : QStringLiteral("parcial"), result.output_truncated ? QStringLiteral(" · saída limitada") : QString{}));
         decompiler_status_->setToolTip(result.warnings.join(QLatin1Char('\n')));
@@ -583,6 +724,8 @@ void MainWindow::navigate(Address address, bool record_history) {
         const auto result = watcher->result(); watcher->deleteLater();
         if (token != selection_token_ || closing_) return;
         ir_->setPlainText(result.text);
+        static_cast<CodeEditor*>(ir_)->set_source_addresses(result.source_addresses);
+        if (selected_address_) static_cast<CodeEditor*>(ir_)->select_address(*selected_address_);
         ir_status_->setText(QStringLiteral("IR própria · %1/%2 instruções modeladas · operações não modeladas permanecem opacas").arg(result.modeled_instructions).arg(result.total_instructions));
     });
     watcher->setFuture(QtConcurrent::run([snapshot = std::shared_ptr<const AnalysisSnapshot>(snapshot_), index, stop = selection_stop_.get_token()] {
@@ -590,6 +733,7 @@ void MainWindow::navigate(Address address, bool record_history) {
         catch (const std::exception& exception) { RenderedFunction result; result.text = exception_text(exception); return result; }
         catch (...) { RenderedFunction result; result.text = QStringLiteral("IR indisponível para a função."); return result; }
     }));
+    select_instruction(address);
     update_actions();
 }
 void MainWindow::history_step(int direction) {
@@ -608,12 +752,12 @@ void MainWindow::jump() {
 }
 void MainWindow::examine_path(const QString& path) {
     byte_path_ = path; hex_->show_file(path);
-    docks_[QStringLiteral("hex")]->show(); docks_[QStringLiteral("hex")]->raise();
+    show_bottom_tab(hex_);
 }
 void MainWindow::show_offset(quint64 offset) {
     const auto path = snapshot_ ? snapshot_->metadata.source_path : byte_path_;
     if (path.isEmpty()) return;
-    hex_->show_file(path, offset); docks_[QStringLiteral("hex")]->show(); docks_[QStringLiteral("hex")]->raise();
+    hex_->show_file(path, offset); show_bottom_tab(hex_);
 }
 
 void MainWindow::set_note_address(std::optional<Address> address) {
@@ -676,7 +820,7 @@ void MainWindow::update_audit() {
         Rows rows;
         try {
             const QStringList names{QStringLiteral("gets"), QStringLiteral("strcpy"), QStringLiteral("strcat"), QStringLiteral("sprintf")};
-            QSet<QString> slots;
+            QSet<QString> import_slots;
             bool limited = false;
             for (const auto& imported : snapshot->metadata.imports) {
                 check_cancelled(stop);
@@ -687,12 +831,12 @@ void MainWindow::update_audit() {
                 if (rows.size() >= 100) { limited = true; continue; }
                 const auto address = imported.slot ? imported.slot->text() : QString{};
                 rows.append({imported.name.left(512) + QStringLiteral(" · ") + imported.library.left(512) + QStringLiteral(" · revisar limites da entrada/destino"), address});
-                if (imported.slot) slots.insert(address);
+                if (imported.slot) import_slots.insert(address);
             }
             // One pass over references, bounded output, no quadratic GUI work.
             for (const auto& reference : snapshot->references) {
                 check_cancelled(stop);
-                if (!slots.contains(reference.target.text())) continue;
+                if (!import_slots.contains(reference.target.text())) continue;
                 if (rows.size() >= 199) { limited = true; break; }
                 rows.append({reference.source.text() + QStringLiteral(" → ") + reference.target.text() + QStringLiteral(" · ") + reference.type.left(128), reference.source_function.value_or(reference.source).text()});
             }
@@ -745,7 +889,19 @@ void MainWindow::export_ir() {
     });
 }
 void MainWindow::about() {
-    QMessageBox::about(this, QStringLiteral("REWorkbench"), QStringLiteral("Bancada independente de engenharia reversa\n\nAplicação e núcleo próprios em C++20, interface Qt, carregadores nativos, projetos SQLite e IR parcial.\n\nGhidra é inspiração de produto e não é uma dependência desta aplicação.\n%1\n\nA decompilação de alto nível está em desenvolvimento; a IR mostra explicitamente semântica ainda não modelada.").arg(decoder_description()));
+    QMessageBox dialog(QMessageBox::NoIcon, QStringLiteral("Rework"),
+        QStringLiteral("Bancada independente de engenharia reversa\n\nAplicação e núcleo próprios em C++20, interface Qt, carregadores nativos, projetos SQLite e IR parcial.\n\nGhidra é inspiração de produto e não é uma dependência desta aplicação.\n%1\n\nA decompilação de alto nível está em desenvolvimento; a IR mostra explicitamente semântica ainda não modelada.").arg(decoder_description()), QMessageBox::Ok, this);
+    dialog.setTextFormat(Qt::PlainText);
+    dialog.setWindowIcon(application_icon());
+    dialog.setIconPixmap(application_icon().pixmap(QSize(80, 80), devicePixelRatioF()));
+    dialog.setInformativeText(QStringLiteral("Codicons — Microsoft e colaboradores. Ícones sob CC BY 4.0; código sob MIT.\nSeti UI — Jesse Weed, MIT.\nhttps://github.com/microsoft/vscode-codicons\nhttps://github.com/jesseweed/seti-ui"));
+    QString attribution;
+    for (const auto* path : {":/codicons/NOTICE.md", ":/codicons/LICENSE", ":/codicons/LICENSE-CODE", ":/seti/NOTICE.md", ":/seti/LICENSE.md"}) {
+        QFile file(QString::fromLatin1(path));
+        if (file.open(QIODevice::ReadOnly)) attribution += QStringLiteral("\n\n") + QString::fromUtf8(file.readAll());
+    }
+    if (!attribution.isEmpty()) dialog.setDetailedText(attribution);
+    dialog.exec();
 }
 void MainWindow::closeEvent(QCloseEvent* event) {
     if (allow_close_ || (!busy_ && (!project_ || drafts_.isEmpty()))) {
@@ -753,7 +909,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         selection_stop_.request_stop();
         audit_stop_.request_stop();
         settings_.setValue(QStringLiteral("window/geometry"), saveGeometry());
-        settings_.setValue(QStringLiteral("window/state"), saveState());
+        save_workspace();
         settings_.sync(); event->accept(); return;
     }
     event->ignore(); closing_ = true; selection_stop_.request_stop();

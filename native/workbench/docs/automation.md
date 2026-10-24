@@ -1,6 +1,6 @@
 # Automação e integração nativas 0.3
 
-O target CMake `reworkbench-cli` usa Qt Core/Sql e a mesma biblioteca do desktop. Os comandos abaixo documentam uso futuro; **nenhum foi executado nesta etapa**, e nenhum executável foi produzido. A compilação continua suspensa por orientação do usuário.
+O target CMake `reworkbench-cli` usa Qt Core/Sql e a mesma biblioteca do desktop. A compilação e os testes foram autorizados em 15/10/2026. Os resultados e limites de cobertura estão em [validation.md](../../../docs/validation.md). Os exemplos abaixo documentam a interface da CLI; nem toda combinação foi exercitada.
 
 ## Comandos
 

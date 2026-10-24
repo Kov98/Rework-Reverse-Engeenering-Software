@@ -1,9 +1,9 @@
 # Native investigation tools
 
-These C++20 sources add usable, deliberately bounded investigation APIs. They have
-not been compiled, tested or executed. Dynamic acceptance remains deferred at the
-user's explicit request. The documentation describes the intended source behavior,
-not measured correctness or parity with another reverse engineering product.
+These C++20 sources add deliberately bounded investigation APIs. Current build and
+runtime coverage is recorded in [validation.md](../../../docs/validation.md).
+This documentation describes their contracts and limits; initial smoke tests do
+not establish correctness for arbitrary binaries or parity with another product.
 
 ## Byte and function comparisons
 

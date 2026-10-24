@@ -20,6 +20,9 @@ struct DecompilationOptions {
 struct DecompilationResult {
     QString pseudocode;
     QString ssa_text;
+    // Zero-based output lines with an exact original instruction; synthetic lines are omitted.
+    QMap<int, Address> pseudocode_addresses;
+    QMap<int, Address> ssa_addresses;
     QStringList warnings;
     quint32 modeled_instructions = 0;
     quint32 total_instructions = 0;

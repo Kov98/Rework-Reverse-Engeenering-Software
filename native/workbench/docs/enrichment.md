@@ -1,6 +1,6 @@
 # Enriquecimento próprio de binários e mapas de símbolos
 
-Implementação em `enrichment.cpp`, `debug_symbols.cpp` e `enrichment_internal.hpp`, com API pública em `include/reworkbench/enrichment.hpp`. Este código foi escrito e revisado por leitura do fonte; não foi compilado, executado ou submetido a testes nesta etapa, por orientação do usuário.
+Implementação em `enrichment.cpp`, `debug_symbols.cpp` e `enrichment_internal.hpp`, com API pública em `include/reworkbench/enrichment.hpp`. A cobertura atual de build e execução está em [validation.md](../../../docs/validation.md); os testes iniciais não validam todos os metadados e formatos.
 
 ## API e integração
 

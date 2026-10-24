@@ -1,6 +1,6 @@
 # Carregadores nativos de imagens
 
-O código em `src/binary_image.cpp` e `src/loaders.cpp` é uma implementação própria em C++20. Não usa APIs do Ghidra e não inicia a amostra. Esta entrega foi escrita e revisada como fonte; não houve compilação, configuração CMake, testes ou execução por instrução do usuário. Compatibilidade prática e robustez precisam de validação posterior autorizada.
+O código em `src/binary_image.cpp` e `src/loaders.cpp` é uma implementação própria em C++20. Não usa APIs do Ghidra e não inicia a amostra. A cobertura de compilação e execução inicial está em [validation.md](../../../docs/validation.md). Os testes com fixtures não estabelecem compatibilidade e robustez para todos os arquivos.
 
 ## Contrato de arquivo e endereços
 

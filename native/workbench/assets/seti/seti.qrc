@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/seti">
+        <file>seti.ttf</file>
+        <file>LICENSE.md</file>
+        <file>NOTICE.md</file>
+    </qresource>
+</RCC>

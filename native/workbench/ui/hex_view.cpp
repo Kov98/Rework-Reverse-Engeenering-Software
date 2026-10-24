@@ -1,10 +1,14 @@
 #include "hex_view.hpp"
+#include "workspace_theme.hpp"
+#include "workbench_icons.hpp"
 #include "reworkbench/binary_image.hpp"
 
 #include <QFont>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QPushButton>
+#include <QPainter>
+#include <QStyle>
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
@@ -13,26 +17,51 @@
 namespace reworkbench::ui {
 namespace {
 struct HexResult { QString text; QString error; quint64 size = 0; };
+class FileDetailLabel final : public QLabel {
+public:
+    using QLabel::QLabel;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this); painter.setFont(font()); painter.setPen(palette().color(foregroundRole()));
+        painter.drawText(contentsRect(), Qt::AlignVCenter | Qt::AlignLeft,
+            fontMetrics().elidedText(text(), Qt::ElideMiddle, contentsRect().width()));
+    }
+};
 }
 HexView::HexView(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* bar = new QHBoxLayout;
-    bar->addWidget(new QLabel(QStringLiteral("Offset no arquivo")));
+    layout->setContentsMargins(6, 6, 6, 4); layout->setSpacing(4);
+    auto* toolbar = new QWidget; toolbar->setObjectName("hexToolbar");
+    toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto* bar = new QHBoxLayout(toolbar); bar->setContentsMargins(0, 0, 0, 0); bar->setSpacing(6);
+    bar->addWidget(new QLabel(QStringLiteral("Offset")));
     position_ = new QLineEdit(QStringLiteral("0x0"));
-    position_->setMaximumWidth(170);
+    position_->setObjectName("hexOffset"); position_->setToolTip(QStringLiteral("Offset no arquivo"));
+    position_->setMinimumWidth(80); position_->setMaximumWidth(128);
     bar->addWidget(position_);
-    auto* previous = new QPushButton(QStringLiteral("Anterior"));
-    auto* next = new QPushButton(QStringLiteral("Próximos 64 KiB"));
+    auto* previous = new QPushButton;
+    previous->setIcon(workbench_icon("arrow-left")); previous->setToolTip(QStringLiteral("Página anterior"));
+    previous->setAccessibleName(QStringLiteral("Página anterior")); previous->setObjectName("hexPrevious");
+    auto* next = new QPushButton(workbench_icon("arrow-right"), QStringLiteral("64 KiB"));
+    next->setToolTip(QStringLiteral("Próximos 64 KiB")); next->setObjectName("hexNext");
+    const int control_height = std::max({position_->sizeHint().height(), previous->sizeHint().height(), next->sizeHint().height()});
+    for (auto* button : {previous, next}) button->setMinimumHeight(control_height);
+    position_->setMinimumHeight(control_height); toolbar->setMinimumHeight(control_height);
     bar->addWidget(previous);
     bar->addWidget(next);
-    detail_ = new QLabel;
+    detail_ = new FileDetailLabel; detail_->setObjectName("hexFileDetail");
+    detail_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); detail_->setMinimumWidth(0);
+    detail_->setMinimumHeight(control_height);
     detail_->setTextFormat(Qt::PlainText);
     bar->addWidget(detail_, 1);
-    layout->addLayout(bar);
+    layout->addWidget(toolbar);
     text_ = new QPlainTextEdit;
     text_->setReadOnly(true);
     text_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    text_->setFont(QFont(QStringLiteral("Consolas"), 10));
+    text_->setFont(default_code_font());
+    const int minimum_text_height = text_->fontMetrics().height() + style()->pixelMetric(QStyle::PM_ScrollBarExtent);
+    text_->setMinimumHeight(minimum_text_height);
+    text_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
     layout->addWidget(text_);
     connect(position_, &QLineEdit::returnPressed, this, [this] {
         bool ok = false;

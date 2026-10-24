@@ -1,8 +1,8 @@
-﻿# REWorkbench Native
+﻿# Rework
 
 Bancada independente de engenharia reversa, com **C++20 como linguagem principal e interface Qt**. Ghidra e uma referencia de produto; o aplicativo nativo nao o utiliza como motor e nao precisa de JVM, PyGhidra ou Python.
 
-Esta entrega contem **codigo-fonte sem testes, compilacao ou execucao**, conforme orientacao do usuario. Ainda nao foi produzido um executavel da aplicacao nativa. O objetivo de evoluir para uma ferramenta superior e de longo prazo; nenhuma superioridade ou paridade industrial foi validada nesta etapa.
+A compilacao e a validacao dinamica nativas foram autorizadas em 15/10/2026. Os resultados, comandos e limites estao em [validation.md](docs/validation.md). O objetivo de evoluir para uma ferramenta superior e de longo prazo; nenhuma superioridade ou paridade industrial foi validada.
 
 ## Codigo da aplicacao propria
 
@@ -21,7 +21,7 @@ Esta entrega contem **codigo-fonte sem testes, compilacao ou execucao**, conform
 
 Os detalhes e limites de formatos estao em [loaders.md](native/workbench/docs/loaders.md), os do motor em [analysis.md](native/workbench/docs/analysis.md), e os de persistencia em [projects.md](native/workbench/docs/projects.md).
 
-As adicoes da versao 0.3 estao em [decompiler.md](native/workbench/docs/decompiler.md), [enrichment.md](native/workbench/docs/enrichment.md), [investigation.md](native/workbench/docs/investigation.md) e [automation.md](native/workbench/docs/automation.md). Todos esses recursos continuam sem compilacao ou execucao nesta entrega.
+As adicoes da versao 0.3 estao em [decompiler.md](native/workbench/docs/decompiler.md), [enrichment.md](native/workbench/docs/enrichment.md), [investigation.md](native/workbench/docs/investigation.md) e [automation.md](native/workbench/docs/automation.md). A cobertura de testes de cada etapa esta registrada no documento de validacao.
 
 ## Organizacao
 
@@ -40,26 +40,26 @@ src/reworkbench/legacy_main.py    entrada explicita do prototipo historico
 
 Os arquivos ficam no worktree `.worktrees/implementation`, branch `feat/reworkbench`. O prototipo Python/Ghidra e seus testes continuam preservados como historico; eles nao fazem parte do caminho padrao do produto. Suas dependencias Python estao isoladas no extra `legacy` e nao sao requisitos da aplicacao C++.
 
-## Preparacao e compilacao futura
+## Preparacao e compilacao
 
-**Nenhum dos comandos abaixo foi executado nesta etapa.** Requisitos previstos: compilador e biblioteca padrao C++20, CMake3.20+, Qt6.5+ com Core, Widgets, Concurrent, Sql e o plugin QSQLITE. Capstone5.0.6 e a referencia do decoder opcional. Nao existe download automatico de dependencias no CMake.
+Requisitos: compilador e biblioteca padrao C++20, CMake3.20+, Qt6.5+ com Core, Widgets, Concurrent, Sql e o plugin QSQLITE. A primeira compilacao usa Windows x64, MinGW13.1.0, CMake4.4.3 e Qt6.8.3. Capstone5.0.6 e a referencia do decoder opcional. Nao existe download automatico de dependencias no CMake.
 
-Quando a compilacao for autorizada, a partir da raiz deste worktree:
+A partir da raiz deste worktree, usando um Qt compativel com o compilador escolhido:
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/caminho/Qt/versao/msvc_64"
 cmake --build build --config Release
 ```
 
-Se Capstone estiver instalado fora dos caminhos padrao, informe os caminhos de headers e biblioteca na configuracao futura:
+Se Capstone estiver instalado fora dos caminhos padrao, informe os caminhos de headers e biblioteca na configuracao:
 
 ```powershell
 cmake -S . -B build -DCMAKE_PREFIX_PATH="C:/caminho/Qt/versao/msvc_64" -DREWORKBENCH_CAPSTONE_INCLUDE_DIR="C:/deps/include" -DREWORKBENCH_CAPSTONE_LIBRARY="C:/deps/lib/capstone.lib"
 ```
 
-Sem Capstone, o codigo contempla modo parcial de formatos, bytes e strings, sem fingir que assembly ou IR estao disponiveis. Uma versao de API diferente de Capstone5 deve ser adaptada explicitamente. Empacotar o executavel exige tambem disponibilizar os runtimes/plugins Qt e o decoder usado; isso nao foi realizado.
+Sem Capstone, o programa oferece modo parcial de formatos, bytes e strings, sem fingir que assembly ou IR estao disponiveis. Uma versao de API diferente de Capstone5 deve ser adaptada explicitamente. Distribuir o executavel exige disponibilizar tambem os runtimes/plugins Qt e o decoder usado; o diretorio local de build recebe esses arquivos com `windeployqt`.
 
-O destino previsto do executavel e `build/bin/reworkbench.exe`. Quando ele existir:
+O executavel fica em `build/bin/reworkbench.exe`:
 
 ```powershell
 .\scripts\run.ps1
@@ -69,6 +69,12 @@ O destino previsto do executavel e `build/bin/reworkbench.exe`. Quando ele exist
 O lancador nao compila e nao retorna ao motor legado. `scripts/setup.ps1` apenas explica os requisitos nativos; `scripts/doctor.ps1` lista caminhos sem iniciar compilador, aplicativo ou Ghidra.
 
 ## Fluxo nativo
+
+A interface da **alpha 0.3.0** combina a organizacao de um editor como VS Code com navegacao de binarios: faixa superior integrada com busca central, explorador em arvore, abas de funcoes, breadcrumbs, listagem ao lado de pseudocodigo/SSA/IR/grafo e painel inferior recolhivel. O tema **Rework Dark** usa grafite, roxo derivado do logotipo oficial, metricas centralizadas, tipografia compartilhada, sintaxe C/Assembly, Codicons e Seti. O logo original identifica a janela e o executavel Windows. Abas podem ser reordenadas e fechadas; paineis e fonte sao personalizaveis e persistidos. Ctrl+P busca funcoes, F12 segue destinos e a selecao da listagem destaca blocos no grafo. Consulte [workspace.md](native/workbench/docs/workspace.md) para atalhos e [theme.md](native/workbench/docs/theme.md) para aparencia e licencas. Nomes internos de targets e preferencias foram preservados por compatibilidade.
+
+O painel **Assistente IA** prepara uma solicitacao local com contexto da funcao selecionada, para revisar e copiar. A conexao com modelos fica para uma etapa posterior; o botao Enviar permanece desabilitado.
+
+A navegacao sincroniza instrucoes, blocos e linhas de pseudocodigo/SSA/IR que possuem origem conhecida. O historico conserva o endereco exato, inclusive entre analises. Os editores oferecem busca local com Ctrl+F, F3/Shift+F3 e diferenciacao de maiusculas; fechar abas em segundo plano preserva a posicao ativa. As linhas sinteticas sem origem unica permanecem sem associacao.
 
 1. Criar um projeto em pasta vazia ou abrir uma pasta com `project.rwb.json`.
 2. Importar o binario. Para imagens universais, escolher o slice; para firmware bruto, definir arquitetura, ordem dos bytes, base e entrada.
